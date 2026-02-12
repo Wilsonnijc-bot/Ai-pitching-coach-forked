@@ -1,5 +1,8 @@
 // API configuration and wrapper functions
-const API_BASE_URL = 'http://localhost:8000';
+const isLocalFrontendDev =
+    ['localhost', '127.0.0.1'].includes(window.location.hostname) &&
+    window.location.port === '5173';
+const API_BASE_URL = isLocalFrontendDev ? 'http://localhost:8000' : '';
 const JOB_POLL_INTERVAL_MS = 1500;
 const JOB_TIMEOUT_MS = 5 * 60 * 1000;
 

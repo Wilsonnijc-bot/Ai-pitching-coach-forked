@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import speech
 from google.oauth2 import service_account
@@ -506,23 +507,6 @@ def health() -> dict:
     return {"status": "ok", "storage": job_store.storage_name}
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return """
-    <html>
-      <head><title>AI Pitching Coach Backend</title></head>
-      <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 24px;">
-        <h1>AI Pitching Coach Backend</h1>
-        <p>The backend is running.</p>
-        <ul>
-          <li><a href="/health">Health</a></li>
-          <li><a href="/docs">API Docs</a></li>
-        </ul>
-      </body>
-    </html>
-    """
-
-
 @app.post("/api/jobs", response_model=CreateJobResponse)
 async def create_transcription_job(
     background_tasks: BackgroundTasks,
@@ -561,3 +545,8 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         result=job.result,
         error=job.error,
     )
+
+
+frontend_dir = Path(__file__).resolve().parent / "app" / "frontend"
+if frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
