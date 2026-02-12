@@ -257,6 +257,10 @@ body {
     margin-bottom: 32px;
 }
 
+.studio-grid.hidden {
+    display: none;
+}
+
 /* Card Styles */
 .card {
     background-color: white;
@@ -500,17 +504,30 @@ body {
     display: block;
 }
 
+.results-panel.without-inputs {
+    margin-top: 0;
+}
+
 .results-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    gap: 12px;
+    flex-wrap: wrap;
 }
 
 .results-title {
     font-size: 20px;
     font-weight: 600;
     color: var(--text-primary);
+}
+
+.results-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .tabs {

@@ -10,6 +10,7 @@ const TRANSCRIPTION_POLL_INTERVAL_MS = 1500;
 const SUMMARY_POLL_INTERVAL_MS = 1500;
 const TRANSCRIPTION_TIMEOUT_MS = 3 * 60 * 1000;
 const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000;
+const STAGES = new Set(['idle', 'recording', 'uploading', 'transcribing', 'feedbacking', 'done', 'error']);
 
 class App {
     constructor() {
@@ -22,7 +23,8 @@ class App {
         this.isRecording = false;
         this.isStopping = false;
         this.isBusy = false;
-        this.isSummaryBusy = false;
+        this.stage = 'idle';
+        this.feedbackRequestedForJobId = null;
 
         this.init();
     }
@@ -136,7 +138,7 @@ class App {
                     <h1 class="studio-title">Studio</h1>
                 </div>
 
-                <div class="studio-grid">
+                <div class="studio-grid" id="input-blocks">
                     <div class="card" id="deck-upload-card">
                         <h2 class="card-title">Upload your pitch deck</h2>
 
@@ -184,13 +186,16 @@ class App {
                 <div class="card results-panel" id="results-panel">
                     <div class="results-header">
                         <h2 class="results-title">Transcription Results</h2>
-                        <button class="btn btn-secondary" id="copy-transcript-btn">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                            </svg>
-                            Copy transcript
-                        </button>
+                        <div class="results-actions">
+                            <button class="btn btn-secondary" id="copy-transcript-btn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                                Copy transcript
+                            </button>
+                            <button class="btn btn-secondary btn-small" id="new-practice-btn">Start new practice</button>
+                        </div>
                     </div>
 
                     <div class="tabs">
@@ -233,12 +238,12 @@ class App {
 
                     <div class="summary-section">
                         <div class="summary-head">
-                            <h3 class="summary-title">AI Summary</h3>
-                            <button class="btn btn-primary" id="generate-summary-btn" disabled>Generate AI Summary</button>
+                            <h3 class="summary-title">Professional Feedback</h3>
                         </div>
                         <div class="status-message" id="summary-status"></div>
+                        <div class="status-actions" id="summary-actions"></div>
                         <div class="summary-card" id="summary-card">
-                            <p class="summary-empty">Generate a summary after transcription is ready.</p>
+                            <p class="summary-empty">Professional feedback will appear automatically once transcript is ready.</p>
                         </div>
                     </div>
                 </div>
@@ -250,19 +255,31 @@ class App {
         this.deckUploader = new DeckUploader('deck-upload-card');
         this.setupRecording();
         this.setupTabs();
-        this.setupSummaryActions();
-        this.updateJobMeta(null);
+        this.setupStudioActions();
+        this.updateJobMeta(this.currentJobData);
+        if (this.transcriptionData) {
+            this.displayTranscription(this.transcriptionData);
+            this.renderSummary(this.getFeedbackFromJob(this.currentJobData));
+        } else {
+            this.renderSummary(null);
+        }
+        this.applyStudioLayout();
+    }
+
+    setupStudioActions() {
+        const newPracticeBtn = document.getElementById('new-practice-btn');
+        if (newPracticeBtn) {
+            newPracticeBtn.addEventListener('click', () => {
+                this.resetStudioState();
+            });
+        }
     }
 
     setupRecording() {
         const recordBtn = document.getElementById('record-btn');
 
         recordBtn.addEventListener('click', async () => {
-            if (this.isBusy) {
-                return;
-            }
-            if (this.isSummaryBusy) {
-                this.showToast('Summary generation is in progress. Please wait.', 'info');
+            if (this.isBusy || ['uploading', 'transcribing', 'feedbacking'].includes(this.stage)) {
                 return;
             }
 
@@ -279,6 +296,7 @@ class App {
 
         try {
             this.clearStatusActions();
+            this.setStage('recording');
             this.setRecordingStatus('Requesting microphone permission...', 'info', true);
 
             if (!this.audioRecorder) {
@@ -309,6 +327,7 @@ class App {
         } catch (error) {
             console.error('Recording error:', error);
             this.isRecording = false;
+            this.setStage('error');
             this.setRecordButtonState('idle', false);
             this.setRecordingStatus(
                 'Microphone access denied. Please allow microphone access in your browser settings and try again.',
@@ -335,6 +354,7 @@ class App {
 
             this.isRecording = false;
             this.isStopping = false;
+            this.setStage('idle');
             this.setRecordButtonState('idle', false);
             timer.textContent = '00:00';
 
@@ -357,6 +377,7 @@ class App {
             console.error('Stop recording error:', error);
             this.isRecording = false;
             this.isStopping = false;
+            this.setStage('error');
             this.setRecordButtonState('idle', false);
             this.setRecordingStatus(`Error stopping recording: ${error.message}`, 'error', false);
         }
@@ -368,10 +389,12 @@ class App {
         try {
             this.isBusy = true;
             this.clearStatusActions();
+            this.clearSummaryActions();
+            this.setStage('uploading');
             this.setRecordButtonState('busy', true);
-            this.setGenerateSummaryEnabled(false);
             this.renderSummary(null);
             this.setSummaryStatus('', 'info', false);
+            this.feedbackRequestedForJobId = null;
 
             this.setRecordingStatus(
                 selectedDeck ? 'Uploading audio + deck...' : 'Uploading audio...',
@@ -392,6 +415,7 @@ class App {
                 status: created.status || 'queued',
                 progress: 0,
             });
+            this.setStage('transcribing');
 
             const finishedJob = await this.pollJob({
                 jobId: created.job_id,
@@ -410,19 +434,10 @@ class App {
                 },
             });
 
-            this.currentJobData = finishedJob;
-            this.transcriptionData = this.getTranscriptFromJob(finishedJob);
-            this.displayTranscription(this.transcriptionData);
-
-            this.setRecordingStatus('Transcription complete.', 'success', false);
-            this.setGenerateSummaryEnabled(true);
-
-            if (finishedJob.summary) {
-                this.renderSummary(finishedJob.summary);
-                this.setSummaryStatus('Summary already available for this job.', 'success', false);
-            }
+            await this.onTranscriptionReady(finishedJob);
         } catch (error) {
             console.error('Transcription flow error:', error);
+            this.setStage('error');
             this.setRecordingStatus(`Transcription failed: ${error.message}`, 'error', false);
 
             if (this.currentJobId) {
@@ -442,7 +457,6 @@ class App {
         } finally {
             this.isBusy = false;
             this.setRecordButtonState('idle', false);
-            this.setGenerateSummaryEnabled(!!this.transcriptionData);
         }
     }
 
@@ -454,6 +468,7 @@ class App {
         try {
             this.isBusy = true;
             this.clearStatusActions();
+            this.setStage('transcribing');
             this.setRecordButtonState('busy', true);
             this.setRecordingStatus('Retrying transcript polling...', 'info', true);
 
@@ -474,12 +489,9 @@ class App {
                 },
             });
 
-            this.currentJobData = finishedJob;
-            this.transcriptionData = this.getTranscriptFromJob(finishedJob);
-            this.displayTranscription(this.transcriptionData);
-            this.setRecordingStatus('Transcription complete.', 'success', false);
-            this.setGenerateSummaryEnabled(true);
+            await this.onTranscriptionReady(finishedJob);
         } catch (error) {
+            this.setStage('error');
             this.setRecordingStatus(`Polling failed: ${error.message}`, 'error', false);
             this.showStatusActions([
                 {
@@ -496,55 +508,111 @@ class App {
         } finally {
             this.isBusy = false;
             this.setRecordButtonState('idle', false);
-            this.setGenerateSummaryEnabled(!!this.transcriptionData);
         }
     }
 
-    setupSummaryActions() {
-        const summaryButton = document.getElementById('generate-summary-btn');
-        summaryButton.addEventListener('click', async () => {
-            await this.handleGenerateSummary();
-        });
-    }
+    async onTranscriptionReady(job) {
+        this.currentJobData = job;
+        this.transcriptionData = this.getTranscriptFromJob(job);
+        if (!this.transcriptionData) {
+            throw new Error('Transcript is missing in the job response.');
+        }
 
-    async handleGenerateSummary() {
-        if (!this.currentJobId || !this.transcriptionData || this.isSummaryBusy) {
+        this.displayTranscription(this.transcriptionData);
+        this.setRecordingStatus('Transcription complete.', 'success', false);
+
+        const feedback = this.getFeedbackFromJob(job);
+        if (feedback) {
+            this.renderSummary(feedback);
+            this.setSummaryStatus('Feedback generated successfully.', 'success', false);
+            this.setStage('done');
             return;
         }
 
         try {
-            this.isSummaryBusy = true;
-            this.setGenerateSummaryEnabled(false);
-            this.setSummaryStatus('Starting summarization...', 'info', true);
-
-            await startSummarize(this.currentJobId);
-
-            const finishedJob = await this.pollJob({
-                jobId: this.currentJobId,
-                timeoutMs: SUMMARY_TIMEOUT_MS,
-                intervalMs: SUMMARY_POLL_INTERVAL_MS,
-                phaseName: 'Summary',
-                isComplete: (job) => !!job.summary,
-                onTick: (job) => {
-                    this.currentJobData = job;
-                    this.updateJobMeta(job);
-                    this.setSummaryStatus(
-                        `Summarizing... ${this.progressLabel(job.progress)}`,
-                        'info',
-                        true
-                    );
-                },
-            });
-
-            this.currentJobData = finishedJob;
-            this.renderSummary(finishedJob.summary);
-            this.setSummaryStatus('Summary generated successfully.', 'success', false);
+            await this.requestFeedbackForCurrentJob({ isRetry: false });
         } catch (error) {
-            this.setSummaryStatus(`Summary failed: ${error.message}`, 'error', false);
-        } finally {
-            this.isSummaryBusy = false;
-            this.setGenerateSummaryEnabled(!!this.transcriptionData);
+            this.handleFeedbackFailure(error);
         }
+    }
+
+    async requestFeedbackForCurrentJob({ isRetry }) {
+        if (!this.currentJobId || !this.transcriptionData) {
+            return;
+        }
+
+        this.setStage('feedbacking');
+        this.clearSummaryActions();
+        this.setSummaryStatus(
+            isRetry ? 'Retrying professional feedback generation...' : 'Generating professional feedback...',
+            'info',
+            true
+        );
+
+        if (isRetry || this.feedbackRequestedForJobId !== this.currentJobId) {
+            await startSummarize(this.currentJobId);
+            this.feedbackRequestedForJobId = this.currentJobId;
+        }
+
+        const finishedJob = await this.pollJob({
+            jobId: this.currentJobId,
+            timeoutMs: SUMMARY_TIMEOUT_MS,
+            intervalMs: SUMMARY_POLL_INTERVAL_MS,
+            phaseName: 'Feedback',
+            isComplete: (currentJob) => !!this.getFeedbackFromJob(currentJob),
+            onTick: (currentJob) => {
+                this.currentJobData = currentJob;
+                this.updateJobMeta(currentJob);
+                this.setSummaryStatus(
+                    `Generating professional feedback... ${this.progressLabel(currentJob.progress)}`,
+                    'info',
+                    true
+                );
+            },
+        });
+
+        this.currentJobData = finishedJob;
+        const feedback = this.getFeedbackFromJob(finishedJob);
+        if (!feedback) {
+            throw new Error('Feedback payload is missing.');
+        }
+        this.renderSummary(feedback);
+        this.setSummaryStatus('Feedback generated successfully.', 'success', false);
+        this.setStage('done');
+        this.showToast('Feedback generated successfully.', 'info');
+    }
+
+    async retryFeedbackGeneration() {
+        if (!this.currentJobId || !this.transcriptionData || this.isBusy) {
+            return;
+        }
+
+        try {
+            this.isBusy = true;
+            await this.requestFeedbackForCurrentJob({ isRetry: true });
+        } catch (error) {
+            this.handleFeedbackFailure(error);
+        } finally {
+            this.isBusy = false;
+        }
+    }
+
+    handleFeedbackFailure(error) {
+        const detail = error instanceof Error ? error.message : String(error || 'Unknown error');
+        this.setStage('error');
+        this.setSummaryStatus(`Feedback generation failed. Retry. ${detail}`, 'error', false);
+        this.showSummaryActions([
+            {
+                label: 'Retry feedback',
+                kind: 'primary',
+                onClick: () => this.retryFeedbackGeneration(),
+            },
+            {
+                label: 'Start new practice',
+                kind: 'secondary',
+                onClick: () => this.resetStudioState(),
+            },
+        ]);
     }
 
     async pollJob({ jobId, timeoutMs, intervalMs, phaseName, isComplete, onTick }) {
@@ -583,7 +651,11 @@ class App {
         const segmentsTbody = document.getElementById('segments-tbody');
         const wordsTbody = document.getElementById('words-tbody');
 
-        resultsPanel.classList.add('active');
+        if (!resultsPanel || !transcriptText || !segmentsTbody || !wordsTbody) {
+            return;
+        }
+
+        this.applyStudioLayout();
 
         transcriptText.textContent = data.full_text || 'No transcript available';
 
@@ -618,15 +690,17 @@ class App {
         }
 
         const copyBtn = document.getElementById('copy-transcript-btn');
-        copyBtn.onclick = () => {
-            navigator.clipboard.writeText(data.full_text || '').then(() => {
-                const original = copyBtn.innerHTML;
-                copyBtn.innerHTML = '<span>Copied!</span>';
-                setTimeout(() => {
-                    copyBtn.innerHTML = original;
-                }, 1500);
-            });
-        };
+        if (copyBtn) {
+            copyBtn.onclick = () => {
+                navigator.clipboard.writeText(data.full_text || '').then(() => {
+                    const original = copyBtn.innerHTML;
+                    copyBtn.innerHTML = '<span>Copied!</span>';
+                    setTimeout(() => {
+                        copyBtn.innerHTML = original;
+                    }, 1500);
+                });
+            };
+        }
 
         resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -638,7 +712,7 @@ class App {
         }
 
         if (!summary || typeof summary !== 'object') {
-            summaryCard.innerHTML = '<p class="summary-empty">Generate a summary after transcription is ready.</p>';
+            summaryCard.innerHTML = '<p class="summary-empty">Professional feedback will appear automatically once transcript is ready.</p>';
             return;
         }
 
@@ -747,6 +821,34 @@ class App {
         jobMeta.textContent = `Job: ${jobId} | Status: ${status} | Progress: ${progress}`;
     }
 
+    setStage(nextStage) {
+        if (!STAGES.has(nextStage)) {
+            return;
+        }
+        this.stage = nextStage;
+        this.applyStudioLayout();
+    }
+
+    applyStudioLayout() {
+        const inputBlocks = document.getElementById('input-blocks');
+        const resultsPanel = document.getElementById('results-panel');
+        const newPracticeBtn = document.getElementById('new-practice-btn');
+        const hasTranscript = !!this.transcriptionData;
+
+        if (inputBlocks) {
+            inputBlocks.classList.toggle('hidden', hasTranscript);
+        }
+
+        if (resultsPanel) {
+            resultsPanel.classList.toggle('active', hasTranscript);
+            resultsPanel.classList.toggle('without-inputs', hasTranscript);
+        }
+
+        if (newPracticeBtn) {
+            newPracticeBtn.style.display = hasTranscript ? 'inline-flex' : 'none';
+        }
+    }
+
     setRecordButtonState(mode, disabled) {
         const recordBtn = document.getElementById('record-btn');
         const recordText = document.getElementById('record-text');
@@ -770,15 +872,6 @@ class App {
 
         recordBtn.classList.remove('recording');
         recordText.textContent = 'Start recording';
-    }
-
-    setGenerateSummaryEnabled(enabled) {
-        const button = document.getElementById('generate-summary-btn');
-        if (!button) {
-            return;
-        }
-
-        button.disabled = !enabled || this.isSummaryBusy || this.isBusy;
     }
 
     setRecordingStatus(message, type, loading) {
@@ -825,8 +918,32 @@ class App {
         });
     }
 
+    showSummaryActions(actions) {
+        const container = document.getElementById('summary-actions');
+        if (!container) {
+            return;
+        }
+
+        container.innerHTML = '';
+        actions.forEach(action => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `btn ${action.kind === 'primary' ? 'btn-primary' : 'btn-secondary'} btn-small`;
+            button.textContent = action.label;
+            button.addEventListener('click', action.onClick);
+            container.appendChild(button);
+        });
+    }
+
     clearStatusActions() {
         const container = document.getElementById('status-actions');
+        if (container) {
+            container.innerHTML = '';
+        }
+    }
+
+    clearSummaryActions() {
+        const container = document.getElementById('summary-actions');
         if (container) {
             container.innerHTML = '';
         }
@@ -836,21 +953,27 @@ class App {
         this.currentJobId = null;
         this.currentJobData = null;
         this.transcriptionData = null;
+        this.feedbackRequestedForJobId = null;
+        this.setStage('idle');
         this.updateJobMeta(null);
-        this.setGenerateSummaryEnabled(false);
+        this.setRecordingStatus('', 'info', false);
         this.setSummaryStatus('', 'info', false);
         this.renderSummary(null);
         this.clearStatusActions();
+        this.clearSummaryActions();
 
         const resultsPanel = document.getElementById('results-panel');
         if (resultsPanel) {
             resultsPanel.classList.remove('active');
+            resultsPanel.classList.remove('without-inputs');
         }
 
         const timer = document.getElementById('timer');
         if (timer) {
             timer.textContent = '00:00';
         }
+        this.setRecordButtonState('idle', false);
+        this.applyStudioLayout();
     }
 
     showToast(message, type = 'info') {
@@ -874,6 +997,17 @@ class App {
 
     getTranscriptFromJob(job) {
         return job && (job.transcript || job.result) ? (job.transcript || job.result) : null;
+    }
+
+    getFeedbackFromJob(job) {
+        if (!job || typeof job !== 'object') {
+            return null;
+        }
+        const feedback = job.feedback || job.summary;
+        if (!feedback || typeof feedback !== 'object') {
+            return null;
+        }
+        return feedback;
     }
 
     progressLabel(progress) {
