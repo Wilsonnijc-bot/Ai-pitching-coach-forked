@@ -1,7 +1,5 @@
 // Deck upload functionality
 
-import { uploadDeck } from './api.js';
-
 export class DeckUploader {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
@@ -80,21 +78,31 @@ export class DeckUploader {
 
     handleFile(file) {
         // Validate file type
-        const validTypes = [
+        const validTypes = new Set([
             'application/pdf',
-            'application/vnd.ms-powerpoint',
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-        ];
+            'application/x-pdf',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/zip',
+            'application/octet-stream'
+        ]);
+        const name = (file.name || '').toLowerCase();
+        const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+        const validExtensions = new Set(['.pdf', '.pptx']);
 
-        if (!validTypes.includes(file.type)) {
-            this.showStatus('Please select a valid file (.pdf, .ppt, .pptx)', 'error');
+        if (!validExtensions.has(extension)) {
+            this.showStatus('Please select a valid file (.pdf, .pptx)', 'error');
             return;
         }
 
-        // Validate file size (max 50MB)
-        const maxSize = 50 * 1024 * 1024;
+        if (file.type && !validTypes.has(file.type)) {
+            this.showStatus('Unsupported file type. Please upload PDF or PPTX.', 'error');
+            return;
+        }
+
+        // Validate file size (max 25MB)
+        const maxSize = 25 * 1024 * 1024;
         if (file.size > maxSize) {
-            this.showStatus('File size must be less than 50MB', 'error');
+            this.showStatus('File size must be less than 25MB', 'error');
             return;
         }
 
@@ -130,23 +138,10 @@ export class DeckUploader {
 
         const uploadBtn = this.container.querySelector('.btn-upload');
         uploadBtn.disabled = true;
-        uploadBtn.textContent = 'Uploading...';
+        uploadBtn.textContent = 'Ready';
 
-        this.showStatus('Uploading your pitch deck...', 'info');
-
-        try {
-            const result = await uploadDeck(this.currentFile);
-            this.showStatus('Pitch deck uploaded successfully!', 'success');
-            console.log('Upload result:', result);
-        } catch (error) {
-            this.showStatus(
-                `Upload failed: ${error.message}. Please ensure the backend is running.`,
-                'error'
-            );
-        } finally {
-            uploadBtn.disabled = false;
-            uploadBtn.textContent = 'Upload';
-        }
+        this.showStatus('Deck attached. It will upload with your next recording.', 'success');
+        uploadBtn.disabled = false;
     }
 
     formatFileSize(bytes) {

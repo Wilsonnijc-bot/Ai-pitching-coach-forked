@@ -5,9 +5,10 @@ A modern web application for perfecting your pitch presentations with AI-powered
 ## Features
 
 - **Persistent Sidebar Navigation**: ChatGPT-style interface with always-visible navigation
-- **Pitch Deck Upload**: Drag-and-drop or browse to upload .pdf, .ppt, or .pptx files
-- **Audio Recording**: Record up to 5 minutes of your pitch using your microphone
+- **Pitch Deck Upload**: Drag-and-drop or browse to attach .pdf or .pptx files
+- **Flexible Audio Recording**: Stop anytime; 5:00 is only the maximum cap
 - **Real-time Transcription**: Get instant speech-to-text transcription with detailed segments and word-level timing
+- **AI Summary**: Trigger backend summarization and view rendered JSON summary cards
 - **Responsive Design**: Works seamlessly on desktop and mobile devices
 - **Clean, Modern UI**: Professional aesthetic with smooth animations and transitions
 
@@ -67,24 +68,12 @@ The frontend expects a FastAPI backend running at `http://localhost:8000` with t
 
 ### API Endpoints
 
-**1. Upload Pitch Deck**
-```
-POST /api/deck/upload
-Content-Type: multipart/form-data
-Field: deck (file)
-
-Response:
-{
-  "status": "success",
-  "message": "Deck uploaded successfully"
-}
-```
-
-**2. Speech-to-Text Transcription (Async Job)**
+**1. Speech-to-Text + Optional Deck (Async Job)**
 ```
 POST /api/jobs
 Content-Type: multipart/form-data
 Field: audio (file)
+Field: deck (optional file)
 
 Immediate Response:
 {
@@ -99,9 +88,9 @@ GET /api/jobs/{job_id}
 Response:
 {
   "job_id": "<uuid>",
-  "status": "queued | transcribing | done | failed",
+  "status": "queued | deck_processing | transcribing | summarizing | done | failed",
   "progress": 0-100,
-  "result": {
+  "transcript": {
     "full_text": "Complete transcription text...",
     "segments": [
       {
@@ -118,9 +107,40 @@ Response:
       }
     ]
   } | null,
+  "deck": {
+    "filename": "deck.pdf",
+    "content_type": "application/pdf",
+    "size_bytes": 12345,
+    "text_excerpt": "first 500 chars...",
+    "num_pages_or_slides": 10
+  } | null,
+  "summary": {
+    "title": "Summary title",
+    "one_sentence_summary": "One sentence",
+    "key_points": ["..."],
+    "audience": "...",
+    "ask_or_goal": "...",
+    "clarity_score": 8,
+    "confidence": "medium",
+    "red_flags": [],
+    "next_steps": ["..."]
+  } | null,
   "error": "string | null"
 }
 ```
+
+**2. Start AI Summary (Async)**
+```
+POST /api/jobs/{job_id}/summarize
+
+Immediate Response:
+{
+  "job_id": "<uuid>",
+  "status": "summarizing"
+}
+```
+
+Then poll `GET /api/jobs/{job_id}` until `summary` is non-null or status is `failed`.
 
 **3. Health Check (Optional)**
 ```
@@ -181,13 +201,14 @@ The app requires microphone access for recording. If denied:
 
 ### 2. Upload Pitch Deck
 - Drag and drop your deck file onto the upload area, or click to browse
-- Supported formats: .pdf, .ppt, .pptx (max 50MB)
-- Click "Upload" to send to backend
+- Supported formats: .pdf, .pptx (max 25MB each)
+- Click "Upload" to mark the deck for the next recording upload
 
 ### 3. Record Your Pitch
 - Click the "Start" button to begin recording
-- Speak your pitch (max 5 minutes)
-- Click "Stop" to end recording
+- Speak your pitch and click "Stop" at any time
+- Maximum cap is 5:00 and auto-stop will trigger at that point
+- Recordings shorter than 2 seconds are rejected in UI
 - Audio is automatically uploaded and transcribed
 
 ### 4. View Transcription Results
@@ -195,6 +216,12 @@ The app requires microphone access for recording. If denied:
 - **Segments Tab**: Time-stamped segments with start/end times
 - **Words Tab**: Word-level timing data
 - Click "Copy transcript" to copy the full text to clipboard
+
+### 5. Generate AI Summary
+- Click **Generate AI Summary** after transcript is ready
+- UI calls `POST /api/jobs/{job_id}/summarize` and polls the same job
+- Summary is rendered as structured cards (title, key points, score, confidence, red flags, next steps)
+- Optional **View raw JSON** is available for debugging
 
 ## Troubleshooting
 
@@ -209,14 +236,18 @@ The app requires microphone access for recording. If denied:
 - Ensure CORS is properly configured on the backend
 
 ### Upload Failed
-- Check file size (must be under 50MB)
-- Verify file format (.pdf, .ppt, .pptx)
+- Check file size (must be under 25MB)
+- Verify file format (.pdf, .pptx)
 - Ensure backend endpoint is accessible
 
 ### Recording Stops Automatically
 - Maximum recording duration is 5 minutes
 - Check available disk space
 - Verify browser supports MediaRecorder API
+
+### Recording Too Short
+- Minimum length is 2 seconds
+- Record a little longer before stopping
 
 ## Development Notes
 

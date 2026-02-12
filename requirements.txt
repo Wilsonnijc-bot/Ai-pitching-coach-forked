@@ -4,3 +4,7 @@ python-multipart
 google-cloud-speech
 pydantic
 psycopg[binary]
+pypdf
+python-pptx
+openai>=1.0.0
+httpx

@@ -7,6 +7,7 @@ export class AudioRecorder {
         this.stream = null;
         this.startTime = null;
         this.timerInterval = null;
+        this.maxDurationTriggered = false;
         this.maxDuration = 5 * 60 * 1000; // 5 minutes in milliseconds
     }
 
@@ -70,10 +71,14 @@ export class AudioRecorder {
         if (!this.mediaRecorder) {
             throw new Error('Recorder not initialized');
         }
+        if (this.mediaRecorder.state === 'recording') {
+            throw new Error('Recorder is already recording');
+        }
 
         this.audioChunks = [];
         this.startTime = Date.now();
-        this.mediaRecorder.start(100); // Collect data every 100ms
+        this.maxDurationTriggered = false;
+        this.mediaRecorder.start(250); // Collect data frequently for responsive stop/upload
 
         // Update timer every second
         this.timerInterval = setInterval(() => {
@@ -84,14 +89,18 @@ export class AudioRecorder {
                 onTimerUpdate(seconds);
             }
 
-            // Auto-stop at max duration
-            if (elapsed >= this.maxDuration) {
-                this.stopRecording();
+            // 5:00 is max cap. Let UI trigger stop flow for consistent upload handling.
+            if (elapsed >= this.maxDuration && !this.maxDurationTriggered) {
+                this.maxDurationTriggered = true;
+                clearInterval(this.timerInterval);
+                if (onTimerUpdate) {
+                    onTimerUpdate(Math.floor(this.maxDuration / 1000));
+                }
                 if (onMaxDuration) {
                     onMaxDuration();
                 }
             }
-        }, 1000);
+        }, 250);
     }
 
     /**
@@ -119,6 +128,17 @@ export class AudioRecorder {
     }
 
     /**
+     * Returns elapsed recording seconds based on start timestamp.
+     * @returns {number}
+     */
+    getElapsedSeconds() {
+        if (!this.startTime) {
+            return 0;
+        }
+        return Math.floor((Date.now() - this.startTime) / 1000);
+    }
+
+    /**
      * Clean up resources
      */
     cleanup() {
@@ -133,6 +153,8 @@ export class AudioRecorder {
         this.mediaRecorder = null;
         this.audioChunks = [];
         this.stream = null;
+        this.startTime = null;
+        this.maxDurationTriggered = false;
     }
 
     /**

@@ -2,7 +2,14 @@
 
 import { AudioRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { transcribeAudio } from './api.js';
+import { createJob, getJob, startSummarize } from './api.js';
+
+const MAX_RECORD_SECONDS = 5 * 60;
+const MIN_RECORD_SECONDS = 2;
+const TRANSCRIPTION_POLL_INTERVAL_MS = 1500;
+const SUMMARY_POLL_INTERVAL_MS = 1500;
+const TRANSCRIPTION_TIMEOUT_MS = 3 * 60 * 1000;
+const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000;
 
 class App {
     constructor() {
@@ -10,7 +17,13 @@ class App {
         this.audioRecorder = null;
         this.deckUploader = null;
         this.transcriptionData = null;
-        
+        this.currentJobId = null;
+        this.currentJobData = null;
+        this.isRecording = false;
+        this.isStopping = false;
+        this.isBusy = false;
+        this.isSummaryBusy = false;
+
         this.init();
     }
 
@@ -21,12 +34,10 @@ class App {
     }
 
     setupRouter() {
-        // Handle hash changes
         window.addEventListener('hashchange', () => {
             this.handleRoute();
         });
 
-        // Handle navigation clicks
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -51,7 +62,6 @@ class App {
             overlay.classList.remove('active');
         });
 
-        // Close sidebar on navigation (mobile)
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', () => {
                 if (window.innerWidth <= 768) {
@@ -71,7 +81,6 @@ class App {
         const route = window.location.hash.slice(1) || 'home';
         this.currentRoute = route;
 
-        // Update active nav item
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.remove('active');
             if (item.dataset.route === route) {
@@ -79,7 +88,6 @@ class App {
             }
         });
 
-        // Render appropriate page
         switch (route) {
             case 'home':
                 this.renderHome();
@@ -106,7 +114,7 @@ class App {
                     <h1 class="hero-title">AI Pitching Coach</h1>
                     <p class="hero-subtitle">Let your idea shine.</p>
                     <p class="hero-description">
-                        Perfect your pitch with AI-powered feedback. Upload your deck, 
+                        Perfect your pitch with AI-powered feedback. Upload your deck,
                         record your presentation, and get instant transcription and analysis.
                     </p>
                     <a href="#studio" class="btn btn-primary">
@@ -129,16 +137,15 @@ class App {
                 </div>
 
                 <div class="studio-grid">
-                    <!-- Pitch Deck Upload Card -->
                     <div class="card" id="deck-upload-card">
                         <h2 class="card-title">Upload your pitch deck</h2>
-                        
+
                         <div class="upload-area">
-                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/e9275271-5cc3-4538-9599-50f4e1bc9b2f.png" 
+                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/e9275271-5cc3-4538-9599-50f4e1bc9b2f.png"
                                  alt="Upload" class="upload-illustration">
                             <p class="upload-text">Drag and drop your deck here, or click to browse</p>
-                            <p class="upload-hint">Supports .pdf, .ppt, .pptx (max 50MB)</p>
-                            <input type="file" class="file-input" accept=".pdf,.ppt,.pptx">
+                            <p class="upload-hint">Supports .pdf, .pptx (max 25MB)</p>
+                            <input type="file" class="file-input" accept=".pdf,.pptx">
                         </div>
 
                         <div class="file-info">
@@ -153,27 +160,27 @@ class App {
                         <div class="status-message"></div>
                     </div>
 
-                    <!-- Recording Card -->
                     <div class="card" id="recording-card">
                         <h2 class="card-title">Record your pitch</h2>
-                        
+
                         <div class="recording-area">
-                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/630938a7-3ec3-4e35-a03a-123708d88ef1.png" 
+                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/630938a7-3ec3-4e35-a03a-123708d88ef1.png"
                                  alt="Recording" class="recording-visual">
-                            
+
                             <button class="record-button" id="record-btn">
                                 <div class="record-icon"></div>
-                                <span id="record-text">Start</span>
+                                <span id="record-text">Start recording</span>
                             </button>
-                            
+
                             <div class="timer" id="timer">00:00</div>
                         </div>
 
+                        <p class="job-meta" id="job-meta">No active job.</p>
                         <div class="status-message" id="recording-status"></div>
+                        <div class="status-actions" id="status-actions"></div>
                     </div>
                 </div>
 
-                <!-- Transcription Results -->
                 <div class="card results-panel" id="results-panel">
                     <div class="results-header">
                         <h2 class="results-title">Transcription Results</h2>
@@ -223,119 +230,351 @@ class App {
                             </table>
                         </div>
                     </div>
+
+                    <div class="summary-section">
+                        <div class="summary-head">
+                            <h3 class="summary-title">AI Summary</h3>
+                            <button class="btn btn-primary" id="generate-summary-btn" disabled>Generate AI Summary</button>
+                        </div>
+                        <div class="status-message" id="summary-status"></div>
+                        <div class="summary-card" id="summary-card">
+                            <p class="summary-empty">Generate a summary after transcription is ready.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
+
+            <div class="toast-area" id="toast-area"></div>
         `;
 
-        // Initialize deck uploader
         this.deckUploader = new DeckUploader('deck-upload-card');
-
-        // Initialize recording functionality
         this.setupRecording();
-
-        // Setup tabs
         this.setupTabs();
+        this.setupSummaryActions();
+        this.updateJobMeta(null);
     }
 
     setupRecording() {
         const recordBtn = document.getElementById('record-btn');
-        const recordText = document.getElementById('record-text');
-        const timer = document.getElementById('timer');
-        const status = document.getElementById('recording-status');
-
-        let isRecording = false;
-        let recordingSeconds = 0;
 
         recordBtn.addEventListener('click', async () => {
-            if (!isRecording) {
-                // Start recording
-                try {
-                    status.textContent = 'Requesting microphone permission...';
-                    status.className = 'status-message active info';
+            if (this.isBusy) {
+                return;
+            }
+            if (this.isSummaryBusy) {
+                this.showToast('Summary generation is in progress. Please wait.', 'info');
+                return;
+            }
 
-                    if (!this.audioRecorder) {
-                        this.audioRecorder = new AudioRecorder();
-                        await this.audioRecorder.initialize();
-                    }
-
-                    status.textContent = 'Recording...';
-                    recordBtn.classList.add('recording');
-                    recordText.textContent = 'Stop';
-                    isRecording = true;
-                    recordingSeconds = 0;
-
-                    this.audioRecorder.startRecording(
-                        (seconds) => {
-                            recordingSeconds = seconds;
-                            timer.textContent = formatTime(seconds);
-                        },
-                        () => {
-                            // Max duration reached
-                            status.textContent = 'Maximum recording time (5 minutes) reached. Stopping...';
-                            status.className = 'status-message active info';
-                            recordBtn.click(); // Trigger stop
-                        }
-                    );
-
-                } catch (error) {
-                    console.error('Recording error:', error);
-                    status.textContent = `Microphone access denied. Please allow microphone access in your browser settings and try again.`;
-                    status.className = 'status-message active error';
-                    isRecording = false;
-                }
-
+            if (!this.isRecording) {
+                await this.startRecording();
             } else {
-                // Stop recording
-                try {
-                    recordBtn.disabled = true;
-                    status.textContent = 'Stopping recording...';
-                    status.className = 'status-message active info';
-
-                    const audioBlob = await this.audioRecorder.stopRecording();
-                    
-                    recordBtn.classList.remove('recording');
-                    recordText.textContent = 'Start';
-                    isRecording = false;
-                    timer.textContent = '00:00';
-
-                    // Upload and transcribe
-                    await this.handleTranscription(audioBlob);
-
-                } catch (error) {
-                    console.error('Stop recording error:', error);
-                    status.textContent = `Error stopping recording: ${error.message}`;
-                    status.className = 'status-message active error';
-                } finally {
-                    recordBtn.disabled = false;
-                }
+                await this.stopRecordingAndUpload({ fromMaxDuration: false });
             }
         });
     }
 
-    async handleTranscription(audioBlob) {
-        const status = document.getElementById('recording-status');
-        const recordBtn = document.getElementById('record-btn');
+    async startRecording() {
+        const timer = document.getElementById('timer');
 
         try {
-            recordBtn.disabled = true;
-            status.textContent = 'Uploading audio...';
-            status.className = 'status-message active info';
+            this.clearStatusActions();
+            this.setRecordingStatus('Requesting microphone permission...', 'info', true);
 
-            const result = await transcribeAudio(audioBlob);
+            if (!this.audioRecorder) {
+                this.audioRecorder = new AudioRecorder();
+                await this.audioRecorder.initialize();
+            }
 
-            status.textContent = 'Transcription complete!';
-            status.className = 'status-message active success';
+            this.isRecording = true;
+            this.isStopping = false;
+            this.setRecordButtonState('recording', false);
+            timer.textContent = '00:00';
 
-            this.transcriptionData = result;
-            this.displayTranscription(result);
+            this.audioRecorder.startRecording(
+                (seconds) => {
+                    timer.textContent = formatTime(Math.min(seconds, MAX_RECORD_SECONDS));
+                },
+                async () => {
+                    if (!this.isRecording || this.isStopping) {
+                        return;
+                    }
+                    timer.textContent = '05:00';
+                    this.showToast('Reached 5:00 limit. Recording stopped.', 'info');
+                    await this.stopRecordingAndUpload({ fromMaxDuration: true });
+                }
+            );
 
+            this.setRecordingStatus('Recording... Click stop at any time (max 5:00).', 'info', false);
         } catch (error) {
-            console.error('Transcription error:', error);
-            status.textContent = `Transcription failed: ${error.message}. Please ensure the backend is running at http://localhost:8000`;
-            status.className = 'status-message active error';
-        } finally {
-            recordBtn.disabled = false;
+            console.error('Recording error:', error);
+            this.isRecording = false;
+            this.setRecordButtonState('idle', false);
+            this.setRecordingStatus(
+                'Microphone access denied. Please allow microphone access in your browser settings and try again.',
+                'error',
+                false
+            );
         }
+    }
+
+    async stopRecordingAndUpload({ fromMaxDuration }) {
+        const timer = document.getElementById('timer');
+
+        if (!this.isRecording || this.isStopping) {
+            return;
+        }
+
+        this.isStopping = true;
+        this.setRecordButtonState('busy', true);
+        this.setRecordingStatus('Stopping recording...', 'info', true);
+
+        try {
+            const audioBlob = await this.audioRecorder.stopRecording();
+            const elapsedSeconds = this.audioRecorder.getElapsedSeconds();
+
+            this.isRecording = false;
+            this.isStopping = false;
+            this.setRecordButtonState('idle', false);
+            timer.textContent = '00:00';
+
+            if (elapsedSeconds < MIN_RECORD_SECONDS) {
+                this.setRecordingStatus('Recording too short. Please record at least 2 seconds.', 'error', false);
+                return;
+            }
+
+            if (!audioBlob || audioBlob.size === 0) {
+                this.setRecordingStatus('Recording failed. Captured audio is empty.', 'error', false);
+                return;
+            }
+
+            if (fromMaxDuration) {
+                this.setRecordingStatus('Reached 5:00 limit. Uploading recording...', 'info', true);
+            }
+
+            await this.handleTranscription(audioBlob);
+        } catch (error) {
+            console.error('Stop recording error:', error);
+            this.isRecording = false;
+            this.isStopping = false;
+            this.setRecordButtonState('idle', false);
+            this.setRecordingStatus(`Error stopping recording: ${error.message}`, 'error', false);
+        }
+    }
+
+    async handleTranscription(audioBlob) {
+        const selectedDeck = this.deckUploader ? this.deckUploader.currentFile : null;
+
+        try {
+            this.isBusy = true;
+            this.clearStatusActions();
+            this.setRecordButtonState('busy', true);
+            this.setGenerateSummaryEnabled(false);
+            this.renderSummary(null);
+            this.setSummaryStatus('', 'info', false);
+
+            this.setRecordingStatus(
+                selectedDeck ? 'Uploading audio + deck...' : 'Uploading audio...',
+                'info',
+                true
+            );
+
+            const created = await createJob(audioBlob, selectedDeck);
+            if (!created.job_id) {
+                throw new Error('Backend did not return a job_id.');
+            }
+
+            this.currentJobId = created.job_id;
+            this.currentJobData = null;
+            this.transcriptionData = null;
+            this.updateJobMeta({
+                job_id: created.job_id,
+                status: created.status || 'queued',
+                progress: 0,
+            });
+
+            const finishedJob = await this.pollJob({
+                jobId: created.job_id,
+                timeoutMs: TRANSCRIPTION_TIMEOUT_MS,
+                intervalMs: TRANSCRIPTION_POLL_INTERVAL_MS,
+                phaseName: 'Transcription',
+                isComplete: (job) => job.status === 'done' && !!this.getTranscriptFromJob(job),
+                onTick: (job) => {
+                    this.currentJobData = job;
+                    this.updateJobMeta(job);
+                    this.setRecordingStatus(
+                        `Transcribing... ${this.progressLabel(job.progress)}`,
+                        'info',
+                        true
+                    );
+                },
+            });
+
+            this.currentJobData = finishedJob;
+            this.transcriptionData = this.getTranscriptFromJob(finishedJob);
+            this.displayTranscription(this.transcriptionData);
+
+            this.setRecordingStatus('Transcription complete.', 'success', false);
+            this.setGenerateSummaryEnabled(true);
+
+            if (finishedJob.summary) {
+                this.renderSummary(finishedJob.summary);
+                this.setSummaryStatus('Summary already available for this job.', 'success', false);
+            }
+        } catch (error) {
+            console.error('Transcription flow error:', error);
+            this.setRecordingStatus(`Transcription failed: ${error.message}`, 'error', false);
+
+            if (this.currentJobId) {
+                this.showStatusActions([
+                    {
+                        label: 'Retry polling',
+                        kind: 'primary',
+                        onClick: () => this.retryTranscriptionPolling(),
+                    },
+                    {
+                        label: 'Start new recording',
+                        kind: 'secondary',
+                        onClick: () => this.resetStudioState(),
+                    },
+                ]);
+            }
+        } finally {
+            this.isBusy = false;
+            this.setRecordButtonState('idle', false);
+            this.setGenerateSummaryEnabled(!!this.transcriptionData);
+        }
+    }
+
+    async retryTranscriptionPolling() {
+        if (!this.currentJobId) {
+            return;
+        }
+
+        try {
+            this.isBusy = true;
+            this.clearStatusActions();
+            this.setRecordButtonState('busy', true);
+            this.setRecordingStatus('Retrying transcript polling...', 'info', true);
+
+            const finishedJob = await this.pollJob({
+                jobId: this.currentJobId,
+                timeoutMs: TRANSCRIPTION_TIMEOUT_MS,
+                intervalMs: TRANSCRIPTION_POLL_INTERVAL_MS,
+                phaseName: 'Transcription',
+                isComplete: (job) => job.status === 'done' && !!this.getTranscriptFromJob(job),
+                onTick: (job) => {
+                    this.currentJobData = job;
+                    this.updateJobMeta(job);
+                    this.setRecordingStatus(
+                        `Transcribing... ${this.progressLabel(job.progress)}`,
+                        'info',
+                        true
+                    );
+                },
+            });
+
+            this.currentJobData = finishedJob;
+            this.transcriptionData = this.getTranscriptFromJob(finishedJob);
+            this.displayTranscription(this.transcriptionData);
+            this.setRecordingStatus('Transcription complete.', 'success', false);
+            this.setGenerateSummaryEnabled(true);
+        } catch (error) {
+            this.setRecordingStatus(`Polling failed: ${error.message}`, 'error', false);
+            this.showStatusActions([
+                {
+                    label: 'Retry polling',
+                    kind: 'primary',
+                    onClick: () => this.retryTranscriptionPolling(),
+                },
+                {
+                    label: 'Start new recording',
+                    kind: 'secondary',
+                    onClick: () => this.resetStudioState(),
+                },
+            ]);
+        } finally {
+            this.isBusy = false;
+            this.setRecordButtonState('idle', false);
+            this.setGenerateSummaryEnabled(!!this.transcriptionData);
+        }
+    }
+
+    setupSummaryActions() {
+        const summaryButton = document.getElementById('generate-summary-btn');
+        summaryButton.addEventListener('click', async () => {
+            await this.handleGenerateSummary();
+        });
+    }
+
+    async handleGenerateSummary() {
+        if (!this.currentJobId || !this.transcriptionData || this.isSummaryBusy) {
+            return;
+        }
+
+        try {
+            this.isSummaryBusy = true;
+            this.setGenerateSummaryEnabled(false);
+            this.setSummaryStatus('Starting summarization...', 'info', true);
+
+            await startSummarize(this.currentJobId);
+
+            const finishedJob = await this.pollJob({
+                jobId: this.currentJobId,
+                timeoutMs: SUMMARY_TIMEOUT_MS,
+                intervalMs: SUMMARY_POLL_INTERVAL_MS,
+                phaseName: 'Summary',
+                isComplete: (job) => !!job.summary,
+                onTick: (job) => {
+                    this.currentJobData = job;
+                    this.updateJobMeta(job);
+                    this.setSummaryStatus(
+                        `Summarizing... ${this.progressLabel(job.progress)}`,
+                        'info',
+                        true
+                    );
+                },
+            });
+
+            this.currentJobData = finishedJob;
+            this.renderSummary(finishedJob.summary);
+            this.setSummaryStatus('Summary generated successfully.', 'success', false);
+        } catch (error) {
+            this.setSummaryStatus(`Summary failed: ${error.message}`, 'error', false);
+        } finally {
+            this.isSummaryBusy = false;
+            this.setGenerateSummaryEnabled(!!this.transcriptionData);
+        }
+    }
+
+    async pollJob({ jobId, timeoutMs, intervalMs, phaseName, isComplete, onTick }) {
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < timeoutMs) {
+            let job;
+            try {
+                job = await getJob(jobId);
+            } catch (error) {
+                throw new Error(`Network error while polling ${phaseName.toLowerCase()}: ${error.message}`);
+            }
+
+            if (onTick) {
+                onTick(job);
+            }
+
+            if (job.status === 'failed') {
+                const message = job.summary_error || job.error || `${phaseName} failed.`;
+                throw new Error(message);
+            }
+
+            if (isComplete(job)) {
+                return job;
+            }
+
+            await this.sleep(intervalMs);
+        }
+
+        throw new Error(`${phaseName} polling timed out.`);
     }
 
     displayTranscription(data) {
@@ -344,21 +583,18 @@ class App {
         const segmentsTbody = document.getElementById('segments-tbody');
         const wordsTbody = document.getElementById('words-tbody');
 
-        // Show results panel
         resultsPanel.classList.add('active');
 
-        // Display full transcript
         transcriptText.textContent = data.full_text || 'No transcript available';
 
-        // Display segments
         segmentsTbody.innerHTML = '';
-        if (data.segments && data.segments.length > 0) {
+        if (Array.isArray(data.segments) && data.segments.length > 0) {
             data.segments.forEach(segment => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${this.formatTimestamp(segment.start)}</td>
                     <td>${this.formatTimestamp(segment.end)}</td>
-                    <td>${segment.text}</td>
+                    <td>${this.escapeHtml(segment.text || '')}</td>
                 `;
                 segmentsTbody.appendChild(row);
             });
@@ -366,15 +602,14 @@ class App {
             segmentsTbody.innerHTML = '<tr><td colspan="3">No segments available</td></tr>';
         }
 
-        // Display words
         wordsTbody.innerHTML = '';
-        if (data.words && data.words.length > 0) {
+        if (Array.isArray(data.words) && data.words.length > 0) {
             data.words.forEach(word => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${this.formatTimestamp(word.start)}</td>
                     <td>${this.formatTimestamp(word.end)}</td>
-                    <td>${word.word}</td>
+                    <td>${this.escapeHtml(word.word || '')}</td>
                 `;
                 wordsTbody.appendChild(row);
             });
@@ -382,20 +617,100 @@ class App {
             wordsTbody.innerHTML = '<tr><td colspan="3">No word-level data available</td></tr>';
         }
 
-        // Setup copy button
         const copyBtn = document.getElementById('copy-transcript-btn');
         copyBtn.onclick = () => {
-            navigator.clipboard.writeText(data.full_text).then(() => {
-                const originalText = copyBtn.innerHTML;
-                copyBtn.innerHTML = '<span>✓ Copied!</span>';
+            navigator.clipboard.writeText(data.full_text || '').then(() => {
+                const original = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<span>Copied!</span>';
                 setTimeout(() => {
-                    copyBtn.innerHTML = originalText;
-                }, 2000);
+                    copyBtn.innerHTML = original;
+                }, 1500);
             });
         };
 
-        // Scroll to results
         resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    renderSummary(summary) {
+        const summaryCard = document.getElementById('summary-card');
+        if (!summaryCard) {
+            return;
+        }
+
+        if (!summary || typeof summary !== 'object') {
+            summaryCard.innerHTML = '<p class="summary-empty">Generate a summary after transcription is ready.</p>';
+            return;
+        }
+
+        const clarityRaw = Number(summary.clarity_score);
+        const clarityScore = Number.isFinite(clarityRaw) ? Math.min(10, Math.max(1, Math.round(clarityRaw))) : 1;
+        const confidence = String(summary.confidence || '').toLowerCase();
+        const confidenceClass = ['low', 'medium', 'high'].includes(confidence) ? confidence : 'low';
+        const confidenceLabel = confidenceClass.charAt(0).toUpperCase() + confidenceClass.slice(1);
+
+        summaryCard.innerHTML = `
+            <h4 class="summary-main-title">${this.escapeHtml(summary.title || 'Untitled Summary')}</h4>
+            <p class="summary-one-line">${this.escapeHtml(summary.one_sentence_summary || '')}</p>
+
+            <div class="summary-grid">
+                <div class="summary-block">
+                    <h5>Key Points</h5>
+                    ${this.renderStringList(summary.key_points, 'None')}
+                </div>
+
+                <div class="summary-block">
+                    <h5>Audience</h5>
+                    <p>${this.escapeHtml(summary.audience || 'N/A')}</p>
+                </div>
+
+                <div class="summary-block">
+                    <h5>Ask / Goal</h5>
+                    <p>${this.escapeHtml(summary.ask_or_goal || 'N/A')}</p>
+                </div>
+
+                <div class="summary-block">
+                    <h5>Clarity Score</h5>
+                    <div class="clarity-row">
+                        <span class="clarity-badge">${clarityScore}/10</span>
+                        <div class="clarity-bar">
+                            <span style="width:${clarityScore * 10}%"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="summary-block">
+                    <h5>Confidence</h5>
+                    <span class="confidence-pill ${confidenceClass}">${this.escapeHtml(confidenceLabel)}</span>
+                </div>
+
+                <div class="summary-block">
+                    <h5>Red Flags</h5>
+                    ${this.renderStringList(summary.red_flags, 'None')}
+                </div>
+
+                <div class="summary-block full-width">
+                    <h5>Next Steps</h5>
+                    ${this.renderStringList(summary.next_steps, 'None')}
+                </div>
+            </div>
+
+            <details class="raw-json">
+                <summary>View raw JSON</summary>
+                <pre>${this.escapeHtml(JSON.stringify(summary, null, 2))}</pre>
+            </details>
+        `;
+    }
+
+    renderStringList(items, emptyText) {
+        if (!Array.isArray(items) || items.length === 0) {
+            return `<p class="summary-muted">${this.escapeHtml(emptyText)}</p>`;
+        }
+
+        return `
+            <ul class="summary-list">
+                ${items.map(item => `<li>${this.escapeHtml(String(item || ''))}</li>`).join('')}
+            </ul>
+        `;
     }
 
     setupTabs() {
@@ -406,21 +721,183 @@ class App {
             tab.addEventListener('click', () => {
                 const targetTab = tab.dataset.tab;
 
-                // Remove active class from all tabs and contents
                 tabs.forEach(t => t.classList.remove('active'));
                 tabContents.forEach(tc => tc.classList.remove('active'));
 
-                // Add active class to clicked tab and corresponding content
                 tab.classList.add('active');
                 document.getElementById(`${targetTab}-tab`).classList.add('active');
             });
         });
     }
 
+    updateJobMeta(job) {
+        const jobMeta = document.getElementById('job-meta');
+        if (!jobMeta) {
+            return;
+        }
+
+        if (!job) {
+            jobMeta.textContent = 'No active job.';
+            return;
+        }
+
+        const jobId = job.job_id || this.currentJobId || 'N/A';
+        const status = job.status || 'unknown';
+        const progress = typeof job.progress === 'number' ? `${job.progress}%` : 'N/A';
+        jobMeta.textContent = `Job: ${jobId} | Status: ${status} | Progress: ${progress}`;
+    }
+
+    setRecordButtonState(mode, disabled) {
+        const recordBtn = document.getElementById('record-btn');
+        const recordText = document.getElementById('record-text');
+        if (!recordBtn || !recordText) {
+            return;
+        }
+
+        recordBtn.disabled = disabled;
+
+        if (mode === 'recording') {
+            recordBtn.classList.add('recording');
+            recordText.textContent = 'Stop recording';
+            return;
+        }
+
+        if (mode === 'busy') {
+            recordBtn.classList.remove('recording');
+            recordText.textContent = 'Working...';
+            return;
+        }
+
+        recordBtn.classList.remove('recording');
+        recordText.textContent = 'Start recording';
+    }
+
+    setGenerateSummaryEnabled(enabled) {
+        const button = document.getElementById('generate-summary-btn');
+        if (!button) {
+            return;
+        }
+
+        button.disabled = !enabled || this.isSummaryBusy || this.isBusy;
+    }
+
+    setRecordingStatus(message, type, loading) {
+        const status = document.getElementById('recording-status');
+        this.setStatusElement(status, message, type, loading);
+    }
+
+    setSummaryStatus(message, type, loading) {
+        const status = document.getElementById('summary-status');
+        this.setStatusElement(status, message, type, loading);
+    }
+
+    setStatusElement(element, message, type, loading) {
+        if (!element) {
+            return;
+        }
+
+        const text = (message || '').trim();
+        if (!text) {
+            element.textContent = '';
+            element.className = 'status-message';
+            return;
+        }
+
+        const safeType = ['success', 'error', 'info'].includes(type) ? type : 'info';
+        element.textContent = text;
+        element.className = `status-message active ${safeType}${loading ? ' loading' : ''}`;
+    }
+
+    showStatusActions(actions) {
+        const container = document.getElementById('status-actions');
+        if (!container) {
+            return;
+        }
+
+        container.innerHTML = '';
+        actions.forEach(action => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `btn ${action.kind === 'primary' ? 'btn-primary' : 'btn-secondary'} btn-small`;
+            button.textContent = action.label;
+            button.addEventListener('click', action.onClick);
+            container.appendChild(button);
+        });
+    }
+
+    clearStatusActions() {
+        const container = document.getElementById('status-actions');
+        if (container) {
+            container.innerHTML = '';
+        }
+    }
+
+    resetStudioState() {
+        this.currentJobId = null;
+        this.currentJobData = null;
+        this.transcriptionData = null;
+        this.updateJobMeta(null);
+        this.setGenerateSummaryEnabled(false);
+        this.setSummaryStatus('', 'info', false);
+        this.renderSummary(null);
+        this.clearStatusActions();
+
+        const resultsPanel = document.getElementById('results-panel');
+        if (resultsPanel) {
+            resultsPanel.classList.remove('active');
+        }
+
+        const timer = document.getElementById('timer');
+        if (timer) {
+            timer.textContent = '00:00';
+        }
+    }
+
+    showToast(message, type = 'info') {
+        const container = document.getElementById('toast-area');
+        if (!container) {
+            return;
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => {
+                toast.remove();
+            }, 250);
+        }, 2500);
+    }
+
+    getTranscriptFromJob(job) {
+        return job && (job.transcript || job.result) ? (job.transcript || job.result) : null;
+    }
+
+    progressLabel(progress) {
+        return typeof progress === 'number' ? `${progress}%` : '';
+    }
+
+    escapeHtml(value) {
+        return String(value || '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     formatTimestamp(seconds) {
-        const mins = Math.floor(seconds / 60);
-        const secs = (seconds % 60).toFixed(2);
-        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(5, '2')}`;
+        const numeric = Number(seconds) || 0;
+        const mins = Math.floor(numeric / 60);
+        const secs = (numeric % 60).toFixed(2);
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(5, '0')}`;
     }
 
     renderHistory() {
@@ -460,7 +937,6 @@ class App {
     }
 }
 
-// Initialize app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     new App();
 });

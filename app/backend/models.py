@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -24,10 +24,25 @@ class JobRecord:
     status: str
     progress: int
     result: Optional[dict] = None
+    deck: Optional[dict] = None
+    llm_test_output: Optional[str] = None
+    summary_json: Optional[dict] = None
+    summary_error: Optional[str] = None
     error: Optional[str] = None
 
 
 class CreateJobResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class LLMTestResponse(BaseModel):
+    job_id: str
+    status: str
+    llm_test_output: str
+
+
+class SummarizeResponse(BaseModel):
     job_id: str
     status: str
 
@@ -50,9 +65,23 @@ class TranscriptResult(BaseModel):
     words: List[Word]
 
 
+class DeckInfo(BaseModel):
+    filename: str
+    content_type: Optional[str]
+    size_bytes: int
+    text_excerpt: str
+    num_pages_or_slides: Optional[int]
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
     progress: int
-    result: Optional[TranscriptResult]
+    transcript: Optional[TranscriptResult]
+    deck: Optional[DeckInfo]
+    llm_test_output: Optional[str]
+    summary: Optional[Dict[str, object]]
+    summary_error: Optional[str]
+    # Backward-compatible alias for older frontend clients.
+    result: Optional[TranscriptResult] = None
     error: Optional[str]
