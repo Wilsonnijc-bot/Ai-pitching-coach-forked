@@ -1,1 +1,1 @@
-from app.backend.web import app  # Includes job, llm_test, and summarize route wiring.
+from app.backend.web import app  # Includes job, summary, and coaching feedback route wiring.

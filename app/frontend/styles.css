@@ -694,6 +694,32 @@ body {
     color: var(--text-secondary);
 }
 
+.feedback-rounds {
+    display: grid;
+    gap: 18px;
+}
+
+.feedback-round {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+}
+
+.criterion-detail {
+    margin-top: 10px;
+}
+
+.metric-json {
+    margin: 8px 0 0;
+    background: #111827;
+    color: #F3F4F6;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 12px;
+    overflow-x: auto;
+}
+
 .clarity-row {
     display: flex;
     align-items: center;

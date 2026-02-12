@@ -8,7 +8,7 @@ A modern web application for perfecting your pitch presentations with AI-powered
 - **Pitch Deck Upload**: Drag-and-drop or browse to attach .pdf or .pptx files
 - **Flexible Audio Recording**: Stop anytime; 5:00 is only the maximum cap
 - **Real-time Transcription**: Get instant speech-to-text transcription with detailed segments and word-level timing
-- **AI Summary**: Trigger backend summarization and view rendered JSON summary cards
+- **Professional Feedback (Round 1 + Round 2)**: Uses the same transcript and renders both coaching rounds
 - **Responsive Design**: Works seamlessly on desktop and mobile devices
 - **Clean, Modern UI**: Professional aesthetic with smooth animations and transitions
 
@@ -88,7 +88,7 @@ GET /api/jobs/{job_id}
 Response:
 {
   "job_id": "<uuid>",
-  "status": "queued | deck_processing | transcribing | summarizing | done | failed",
+  "status": "queued | deck_processing | transcribing | done | failed",
   "progress": 0-100,
   "transcript": {
     "full_text": "Complete transcription text...",
@@ -114,35 +114,41 @@ Response:
     "text_excerpt": "first 500 chars...",
     "num_pages_or_slides": 10
   } | null,
-  "summary": {
-    "title": "Summary title",
-    "one_sentence_summary": "One sentence",
-    "key_points": ["..."],
-    "audience": "...",
-    "ask_or_goal": "...",
-    "clarity_score": 8,
-    "confidence": "medium",
-    "red_flags": [],
-    "next_steps": ["..."]
-  } | null,
+  "feedback_round_1_status": "pending|running|done|failed",
+  "feedback_round_1": { ... } | null,
+  "feedback_round_2_status": "pending|running|done|failed",
+  "feedback_round_2": { ... } | null,
   "error": "string | null"
 }
 ```
 
-**2. Start AI Summary (Async)**
+**2. Start Round 1 Feedback (Async)**
 ```
-POST /api/jobs/{job_id}/summarize
+POST /api/jobs/{job_id}/feedback/round1
 
 Immediate Response:
 {
   "job_id": "<uuid>",
-  "status": "summarizing"
+  "status": "running|done"
 }
 ```
 
-Then poll `GET /api/jobs/{job_id}` until `summary` is non-null or status is `failed`.
+Then poll `GET /api/jobs/{job_id}` until `feedback_round_1_status` is `done` or `failed`.
 
-**3. Health Check (Optional)**
+**3. Start Round 2 Feedback (Async)**
+```
+POST /api/jobs/{job_id}/feedback/round2
+
+Immediate Response:
+{
+  "job_id": "<uuid>",
+  "status": "running|done"
+}
+```
+
+Then poll `GET /api/jobs/{job_id}` until `feedback_round_2_status` is `done` or `failed`.
+
+**4. Health Check (Optional)**
 ```
 GET /health
 
@@ -217,10 +223,10 @@ The app requires microphone access for recording. If denied:
 - **Words Tab**: Word-level timing data
 - Click "Copy transcript" to copy the full text to clipboard
 
-### 5. Generate AI Summary
-- Click **Generate AI Summary** after transcript is ready
-- UI calls `POST /api/jobs/{job_id}/summarize` and polls the same job
-- Summary is rendered as structured cards (title, key points, score, confidence, red flags, next steps)
+### 5. Professional Feedback (Automatic Round 1 -> Round 2)
+- After transcript is ready, UI starts Round 1 feedback on the same job/transcript
+- Once Round 1 is done, UI starts Round 2 feedback on the same job/transcript
+- Both rounds are rendered in the Professional Feedback panel
 - Optional **View raw JSON** is available for debugging
 
 ## Troubleshooting

@@ -12,13 +12,22 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .constants import MAX_REQUEST_BYTES, MAX_UPLOAD_BYTES
+from .coaching_round1 import run_round1
+from .coaching_round2 import run_round2
 from .deck_extractor import (
     detect_extension,
     sanitize_filename,
     validate_deck_extension,
 )
 from .llm_client import run_llm_test_prompt
-from .models import CreateJobResponse, JobStatusResponse, LLMTestResponse, SummarizeResponse
+from .models import (
+    CreateJobResponse,
+    JobStatusResponse,
+    LLMTestResponse,
+    Round1FeedbackResponse,
+    Round2FeedbackResponse,
+    SummarizeResponse,
+)
 from .summarization import process_summary_job
 from .storage import build_job_store
 from .transcription import process_deck_only_job, process_transcription_job, write_upload_to_disk
@@ -206,6 +215,15 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         llm_test_output=job.llm_test_output,
         summary=job.summary_json,
         summary_error=job.summary_error,
+        derived_metrics=job.derived_metrics,
+        feedback_round_1_status=job.feedback_round_1_status,
+        feedback_round_1=job.feedback_round_1,
+        feedback_round_1_version=job.feedback_round_1_version,
+        feedback_round_1_error=job.feedback_round_1_error,
+        feedback_round_2_status=job.feedback_round_2_status,
+        feedback_round_2=job.feedback_round_2,
+        feedback_round_2_version=job.feedback_round_2_version,
+        feedback_round_2_error=job.feedback_round_2_error,
         result=job.result,
         error=job.error,
     )
@@ -235,6 +253,68 @@ def summarize_job(job_id: str, background_tasks: BackgroundTasks) -> SummarizeRe
     )
     background_tasks.add_task(process_summary_job, job_store, job_id)
     return SummarizeResponse(job_id=job_id, status="summarizing")
+
+
+@app.post("/api/jobs/{job_id}/feedback/round1", response_model=Round1FeedbackResponse)
+def generate_round1_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round1FeedbackResponse:
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    transcript_payload = job.result if isinstance(job.result, dict) else {}
+    transcript_text = str(
+        job.transcript_full_text or transcript_payload.get("full_text") or ""
+    ).strip()
+    if not transcript_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcript is missing for this job. Wait for transcription to finish first.",
+        )
+
+    if job.feedback_round_1_status == "done" and isinstance(job.feedback_round_1, dict):
+        return Round1FeedbackResponse(job_id=job_id, status="done")
+    if job.feedback_round_1_status == "running":
+        return Round1FeedbackResponse(job_id=job_id, status="running")
+
+    job_store.update_job(
+        job_id,
+        feedback_round_1_status="running",
+        feedback_round_1_error=None,
+        feedback_round_1_version="r1_v1",
+    )
+    background_tasks.add_task(run_round1, job_store, job_id)
+    return Round1FeedbackResponse(job_id=job_id, status="running")
+
+
+@app.post("/api/jobs/{job_id}/feedback/round2", response_model=Round2FeedbackResponse)
+def generate_round2_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round2FeedbackResponse:
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    transcript_payload = job.result if isinstance(job.result, dict) else {}
+    transcript_text = str(
+        job.transcript_full_text or transcript_payload.get("full_text") or ""
+    ).strip()
+    if not transcript_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcript is missing for this job. Wait for transcription to finish first.",
+        )
+
+    if job.feedback_round_2_status == "done" and isinstance(job.feedback_round_2, dict):
+        return Round2FeedbackResponse(job_id=job_id, status="done")
+    if job.feedback_round_2_status == "running":
+        return Round2FeedbackResponse(job_id=job_id, status="running")
+
+    job_store.update_job(
+        job_id,
+        feedback_round_2_status="running",
+        feedback_round_2_error=None,
+        feedback_round_2_version="r2_v1",
+    )
+    background_tasks.add_task(run_round2, job_store, job_id)
+    return Round2FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/llm_test", response_model=LLMTestResponse)

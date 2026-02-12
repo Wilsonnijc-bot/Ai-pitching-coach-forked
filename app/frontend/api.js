@@ -72,19 +72,40 @@ export async function getJob(jobId) {
 }
 
 /**
- * Start async summarization for an existing job.
+ * Start Round 1 feedback generation for an existing job.
  * @param {string} jobId
  * @returns {Promise<{job_id:string,status:string}>}
  */
-export async function startSummarize(jobId) {
-    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/summarize`, {
+export async function startRound1Feedback(jobId) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/feedback/round1`, {
         method: 'POST',
     });
 
     if (!response.ok) {
         const detail = await readErrorDetail(
             response,
-            `Failed to start summarization (${response.status})`
+            `Failed to start round 1 feedback (${response.status})`
+        );
+        throw new Error(detail);
+    }
+
+    return response.json();
+}
+
+/**
+ * Start Round 2 feedback generation for an existing job.
+ * @param {string} jobId
+ * @returns {Promise<{job_id:string,status:string}>}
+ */
+export async function startRound2Feedback(jobId) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/feedback/round2`, {
+        method: 'POST',
+    });
+
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to start round 2 feedback (${response.status})`
         );
         throw new Error(detail);
     }

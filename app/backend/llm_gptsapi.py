@@ -89,6 +89,11 @@ def _is_temperature_unsupported(error_message: str) -> bool:
     return "temperature" in lowered and "default (1)" in lowered
 
 
+def _is_response_format_unsupported(error_message: str) -> bool:
+    lowered = (error_message or "").lower()
+    return "response_format" in lowered or "json_object" in lowered
+
+
 def build_summary_user_prompt(transcript_text: str, deck_text: str | None = None) -> str:
     prompt = USER_PROMPT_TEMPLATE.replace("{TRANSCRIPT_TEXT}", transcript_text.strip())
     if deck_text and deck_text.strip():
@@ -102,6 +107,7 @@ def request_chat_completion(
     user_prompt: str,
     temperature: float = 0.3,
     max_tokens: int = 1800,
+    response_format: Dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "model": _model_name(),
@@ -112,6 +118,8 @@ def request_chat_completion(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     timeout_seconds = float(os.getenv("GPTSAPI_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))
     endpoint = _base_url().rstrip("/") + "/chat/completions"
@@ -129,8 +137,11 @@ def request_chat_completion(
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Failed to call GPTsAPI: {exc}") from exc
 
-    response = _send(payload)
-    if response.status_code >= 400:
+    active_payload = dict(payload)
+    response = _send(active_payload)
+    for _ in range(2):
+        if response.status_code < 400:
+            break
         detail = ""
         try:
             error_payload = response.json()
@@ -142,24 +153,36 @@ def request_chat_completion(
         except Exception:
             detail = response.text or ""
 
-        if response.status_code == 400 and _is_temperature_unsupported(detail):
-            retry_payload = dict(payload)
-            retry_payload.pop("temperature", None)
-            response = _send(retry_payload)
+        if response.status_code != 400:
+            break
 
-        if response.status_code >= 400:
-            detail = ""
-            try:
-                error_payload = response.json()
-                detail = (
-                    error_payload.get("error", {}).get("message")
-                    if isinstance(error_payload, dict)
-                    else ""
-                ) or ""
-            except Exception:
-                detail = response.text or ""
-            detail = _truncate(detail or "Unknown provider error")
-            raise RuntimeError(f"GPTsAPI error {response.status_code}: {detail}")
+        retried = False
+        if "response_format" in active_payload and _is_response_format_unsupported(detail):
+            active_payload = dict(active_payload)
+            active_payload.pop("response_format", None)
+            retried = True
+        elif "temperature" in active_payload and _is_temperature_unsupported(detail):
+            active_payload = dict(active_payload)
+            active_payload.pop("temperature", None)
+            retried = True
+
+        if not retried:
+            break
+        response = _send(active_payload)
+
+    if response.status_code >= 400:
+        detail = ""
+        try:
+            error_payload = response.json()
+            detail = (
+                error_payload.get("error", {}).get("message")
+                if isinstance(error_payload, dict)
+                else ""
+            ) or ""
+        except Exception:
+            detail = response.text or ""
+        detail = _truncate(detail or "Unknown provider error")
+        raise RuntimeError(f"GPTsAPI error {response.status_code}: {detail}")
 
     try:
         payload = response.json()

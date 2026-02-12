@@ -19,6 +19,7 @@ from .gcs_utils import (
     upload_json,
     upload_text,
 )
+from .metrics import compute_derived_metrics
 from .stt_v2 import build_audio_blob_path, build_output_prefix, transcribe_v2_chirp2_from_gcs
 from .storage import JobStore
 
@@ -275,6 +276,10 @@ def process_transcription_job(
 
         stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
         transcript_result = stt_payload.get("transcript", {})
+        transcript_full_text = str(transcript_result.get("full_text") or "")
+        transcript_words = list(transcript_result.get("words") or [])
+        transcript_segments = list(transcript_result.get("segments") or [])
+        derived_metrics = compute_derived_metrics(transcript_words)
         has_diarization = bool(stt_payload.get("has_diarization", False))
 
         job_store.update_job(job_id, progress=90)
@@ -301,6 +306,10 @@ def process_transcription_job(
             status="done",
             progress=100,
             result=transcript_result,
+            transcript_full_text=transcript_full_text,
+            transcript_words=transcript_words,
+            transcript_segments=transcript_segments,
+            derived_metrics=derived_metrics,
             artifacts_gcs_prefix=artifacts_gcs_prefix,
             has_diarization=has_diarization,
             artifacts_error=artifacts_error,

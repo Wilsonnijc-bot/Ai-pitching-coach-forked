@@ -53,9 +53,21 @@ class JobStore(Protocol):
         status: Optional[str] = None,
         progress: Optional[int] = None,
         result: object = UNSET,
+        transcript_full_text: object = UNSET,
+        transcript_words: object = UNSET,
+        transcript_segments: object = UNSET,
+        derived_metrics: object = UNSET,
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        feedback_round_1: object = UNSET,
+        feedback_round_1_version: object = UNSET,
+        feedback_round_1_status: object = UNSET,
+        feedback_round_1_error: object = UNSET,
+        feedback_round_2: object = UNSET,
+        feedback_round_2_version: object = UNSET,
+        feedback_round_2_status: object = UNSET,
+        feedback_round_2_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -101,10 +113,22 @@ class InMemoryJobStore:
                 status="queued",
                 progress=0,
                 result=None,
+                transcript_full_text=None,
+                transcript_words=None,
+                transcript_segments=None,
+                derived_metrics=None,
                 deck=None,
                 llm_test_output=None,
                 summary_json=None,
                 summary_error=None,
+                feedback_round_1=None,
+                feedback_round_1_version="r1_v1",
+                feedback_round_1_status="pending",
+                feedback_round_1_error=None,
+                feedback_round_2=None,
+                feedback_round_2_version="r2_v1",
+                feedback_round_2_status="pending",
+                feedback_round_2_error=None,
                 artifacts_gcs_prefix=None,
                 has_diarization=None,
                 artifacts_error=None,
@@ -122,9 +146,21 @@ class InMemoryJobStore:
         status: Optional[str] = None,
         progress: Optional[int] = None,
         result: object = UNSET,
+        transcript_full_text: object = UNSET,
+        transcript_words: object = UNSET,
+        transcript_segments: object = UNSET,
+        derived_metrics: object = UNSET,
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        feedback_round_1: object = UNSET,
+        feedback_round_1_version: object = UNSET,
+        feedback_round_1_status: object = UNSET,
+        feedback_round_1_error: object = UNSET,
+        feedback_round_2: object = UNSET,
+        feedback_round_2_version: object = UNSET,
+        feedback_round_2_status: object = UNSET,
+        feedback_round_2_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -138,12 +174,36 @@ class InMemoryJobStore:
                 job.progress = progress
             if result is not UNSET:
                 job.result = result
+            if transcript_full_text is not UNSET:
+                job.transcript_full_text = transcript_full_text
+            if transcript_words is not UNSET:
+                job.transcript_words = transcript_words
+            if transcript_segments is not UNSET:
+                job.transcript_segments = transcript_segments
+            if derived_metrics is not UNSET:
+                job.derived_metrics = derived_metrics
             if llm_test_output is not UNSET:
                 job.llm_test_output = llm_test_output
             if summary_json is not UNSET:
                 job.summary_json = summary_json
             if summary_error is not UNSET:
                 job.summary_error = summary_error
+            if feedback_round_1 is not UNSET:
+                job.feedback_round_1 = feedback_round_1
+            if feedback_round_1_version is not UNSET:
+                job.feedback_round_1_version = feedback_round_1_version
+            if feedback_round_1_status is not UNSET:
+                job.feedback_round_1_status = feedback_round_1_status
+            if feedback_round_1_error is not UNSET:
+                job.feedback_round_1_error = feedback_round_1_error
+            if feedback_round_2 is not UNSET:
+                job.feedback_round_2 = feedback_round_2
+            if feedback_round_2_version is not UNSET:
+                job.feedback_round_2_version = feedback_round_2_version
+            if feedback_round_2_status is not UNSET:
+                job.feedback_round_2_status = feedback_round_2_status
+            if feedback_round_2_error is not UNSET:
+                job.feedback_round_2_error = feedback_round_2_error
             if artifacts_gcs_prefix is not UNSET:
                 job.artifacts_gcs_prefix = artifacts_gcs_prefix
             if has_diarization is not UNSET:
@@ -213,9 +273,21 @@ class PostgresJobStore:
                         status TEXT NOT NULL,
                         progress INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
                         result JSONB NULL,
+                        transcript_full_text TEXT NULL,
+                        transcript_words JSONB NULL,
+                        transcript_segments JSONB NULL,
+                        derived_metrics JSONB NULL,
                         llm_test_output TEXT NULL,
                         summary_json JSONB NULL,
                         summary_error TEXT NULL,
+                        feedback_round_1 JSONB NULL,
+                        feedback_round_1_version TEXT NOT NULL DEFAULT 'r1_v1',
+                        feedback_round_1_status TEXT NOT NULL DEFAULT 'pending',
+                        feedback_round_1_error TEXT NULL,
+                        feedback_round_2 JSONB NULL,
+                        feedback_round_2_version TEXT NOT NULL DEFAULT 'r2_v1',
+                        feedback_round_2_status TEXT NOT NULL DEFAULT 'pending',
+                        feedback_round_2_error TEXT NULL,
                         artifacts_gcs_prefix TEXT NULL,
                         has_diarization BOOLEAN NULL,
                         artifacts_error TEXT NULL,
@@ -232,7 +304,131 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS transcript_full_text TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS transcript_words JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS transcript_segments JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS derived_metrics JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
                     ADD COLUMN IF NOT EXISTS llm_test_output TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_1 JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_1_version TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_1_status TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_1_version SET DEFAULT 'r1_v1'
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_1_status SET DEFAULT 'pending'
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_1_version = 'r1_v1'
+                    WHERE feedback_round_1_version IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_1_status = 'pending'
+                    WHERE feedback_round_1_status IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_1_error TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_2 JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_2_version TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_2_status TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_2_error TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_2_version SET DEFAULT 'r2_v1'
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_2_status SET DEFAULT 'pending'
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_2_version = 'r2_v1'
+                    WHERE feedback_round_2_version IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_2_status = 'pending'
+                    WHERE feedback_round_2_status IS NULL
                     """
                 )
                 cur.execute(
@@ -293,15 +489,27 @@ class PostgresJobStore:
                         status,
                         progress,
                         result,
+                        transcript_full_text,
+                        transcript_words,
+                        transcript_segments,
+                        derived_metrics,
                         llm_test_output,
                         summary_json,
                         summary_error,
+                        feedback_round_1,
+                        feedback_round_1_version,
+                        feedback_round_1_status,
+                        feedback_round_1_error,
+                        feedback_round_2,
+                        feedback_round_2_version,
+                        feedback_round_2_status,
+                        feedback_round_2_error,
                         artifacts_gcs_prefix,
                         has_diarization,
                         artifacts_error,
                         error
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         job_id,
@@ -310,6 +518,18 @@ class PostgresJobStore:
                         None,
                         None,
                         None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "r1_v1",
+                        "pending",
+                        None,
+                        None,
+                        "r2_v1",
+                        "pending",
                         None,
                         None,
                         None,
@@ -329,9 +549,21 @@ class PostgresJobStore:
                         tj.status,
                         tj.progress,
                         tj.result,
+                        tj.transcript_full_text,
+                        tj.transcript_words,
+                        tj.transcript_segments,
+                        tj.derived_metrics,
                         tj.llm_test_output,
                         tj.summary_json,
                         tj.summary_error,
+                        tj.feedback_round_1,
+                        tj.feedback_round_1_version,
+                        tj.feedback_round_1_status,
+                        tj.feedback_round_1_error,
+                        tj.feedback_round_2,
+                        tj.feedback_round_2_version,
+                        tj.feedback_round_2_status,
+                        tj.feedback_round_2_error,
                         tj.artifacts_gcs_prefix,
                         tj.has_diarization,
                         tj.artifacts_error,
@@ -357,9 +589,21 @@ class PostgresJobStore:
                     status,
                     progress,
                     result,
+                    transcript_full_text,
+                    transcript_words,
+                    transcript_segments,
+                    derived_metrics,
                     llm_test_output,
                     summary_json,
                     summary_error,
+                    feedback_round_1,
+                    feedback_round_1_version,
+                    feedback_round_1_status,
+                    feedback_round_1_error,
+                    feedback_round_2,
+                    feedback_round_2_version,
+                    feedback_round_2_status,
+                    feedback_round_2_error,
                     artifacts_gcs_prefix,
                     has_diarization,
                     artifacts_error,
@@ -373,8 +617,18 @@ class PostgresJobStore:
 
                 if result is not None and isinstance(result, str):
                     result = json.loads(result)
+                if transcript_words is not None and isinstance(transcript_words, str):
+                    transcript_words = json.loads(transcript_words)
+                if transcript_segments is not None and isinstance(transcript_segments, str):
+                    transcript_segments = json.loads(transcript_segments)
+                if derived_metrics is not None and isinstance(derived_metrics, str):
+                    derived_metrics = json.loads(derived_metrics)
                 if summary_json is not None and isinstance(summary_json, str):
                     summary_json = json.loads(summary_json)
+                if feedback_round_1 is not None and isinstance(feedback_round_1, str):
+                    feedback_round_1 = json.loads(feedback_round_1)
+                if feedback_round_2 is not None and isinstance(feedback_round_2, str):
+                    feedback_round_2 = json.loads(feedback_round_2)
 
                 deck = None
                 if deck_filename:
@@ -392,10 +646,22 @@ class PostgresJobStore:
                     status=status,
                     progress=progress,
                     result=result,
+                    transcript_full_text=transcript_full_text,
+                    transcript_words=transcript_words,
+                    transcript_segments=transcript_segments,
+                    derived_metrics=derived_metrics,
                     deck=deck,
                     llm_test_output=llm_test_output,
                     summary_json=summary_json,
                     summary_error=summary_error,
+                    feedback_round_1=feedback_round_1,
+                    feedback_round_1_version=feedback_round_1_version,
+                    feedback_round_1_status=feedback_round_1_status,
+                    feedback_round_1_error=feedback_round_1_error,
+                    feedback_round_2=feedback_round_2,
+                    feedback_round_2_version=feedback_round_2_version,
+                    feedback_round_2_status=feedback_round_2_status,
+                    feedback_round_2_error=feedback_round_2_error,
                     artifacts_gcs_prefix=artifacts_gcs_prefix,
                     has_diarization=has_diarization,
                     artifacts_error=artifacts_error,
@@ -409,9 +675,21 @@ class PostgresJobStore:
         status: Optional[str] = None,
         progress: Optional[int] = None,
         result: object = UNSET,
+        transcript_full_text: object = UNSET,
+        transcript_words: object = UNSET,
+        transcript_segments: object = UNSET,
+        derived_metrics: object = UNSET,
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        feedback_round_1: object = UNSET,
+        feedback_round_1_version: object = UNSET,
+        feedback_round_1_status: object = UNSET,
+        feedback_round_1_error: object = UNSET,
+        feedback_round_2: object = UNSET,
+        feedback_round_2_version: object = UNSET,
+        feedback_round_2_status: object = UNSET,
+        feedback_round_2_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -429,6 +707,18 @@ class PostgresJobStore:
         if result is not UNSET:
             assignments.append("result = %s")
             values.append(Jsonb(result) if result is not None else None)
+        if transcript_full_text is not UNSET:
+            assignments.append("transcript_full_text = %s")
+            values.append(transcript_full_text)
+        if transcript_words is not UNSET:
+            assignments.append("transcript_words = %s")
+            values.append(Jsonb(transcript_words) if transcript_words is not None else None)
+        if transcript_segments is not UNSET:
+            assignments.append("transcript_segments = %s")
+            values.append(Jsonb(transcript_segments) if transcript_segments is not None else None)
+        if derived_metrics is not UNSET:
+            assignments.append("derived_metrics = %s")
+            values.append(Jsonb(derived_metrics) if derived_metrics is not None else None)
         if llm_test_output is not UNSET:
             assignments.append("llm_test_output = %s")
             values.append(llm_test_output)
@@ -438,6 +728,30 @@ class PostgresJobStore:
         if summary_error is not UNSET:
             assignments.append("summary_error = %s")
             values.append(summary_error)
+        if feedback_round_1 is not UNSET:
+            assignments.append("feedback_round_1 = %s")
+            values.append(Jsonb(feedback_round_1) if feedback_round_1 is not None else None)
+        if feedback_round_1_version is not UNSET:
+            assignments.append("feedback_round_1_version = %s")
+            values.append(feedback_round_1_version)
+        if feedback_round_1_status is not UNSET:
+            assignments.append("feedback_round_1_status = %s")
+            values.append(feedback_round_1_status)
+        if feedback_round_1_error is not UNSET:
+            assignments.append("feedback_round_1_error = %s")
+            values.append(feedback_round_1_error)
+        if feedback_round_2 is not UNSET:
+            assignments.append("feedback_round_2 = %s")
+            values.append(Jsonb(feedback_round_2) if feedback_round_2 is not None else None)
+        if feedback_round_2_version is not UNSET:
+            assignments.append("feedback_round_2_version = %s")
+            values.append(feedback_round_2_version)
+        if feedback_round_2_status is not UNSET:
+            assignments.append("feedback_round_2_status = %s")
+            values.append(feedback_round_2_status)
+        if feedback_round_2_error is not UNSET:
+            assignments.append("feedback_round_2_error = %s")
+            values.append(feedback_round_2_error)
         if artifacts_gcs_prefix is not UNSET:
             assignments.append("artifacts_gcs_prefix = %s")
             values.append(artifacts_gcs_prefix)

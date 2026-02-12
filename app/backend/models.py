@@ -24,10 +24,22 @@ class JobRecord:
     status: str
     progress: int
     result: Optional[dict] = None
+    transcript_full_text: Optional[str] = None
+    transcript_words: Optional[List[dict]] = None
+    transcript_segments: Optional[List[dict]] = None
+    derived_metrics: Optional[dict] = None
     deck: Optional[dict] = None
     llm_test_output: Optional[str] = None
     summary_json: Optional[dict] = None
     summary_error: Optional[str] = None
+    feedback_round_1: Optional[dict] = None
+    feedback_round_1_version: Optional[str] = None
+    feedback_round_1_status: Optional[str] = None
+    feedback_round_1_error: Optional[str] = None
+    feedback_round_2: Optional[dict] = None
+    feedback_round_2_version: Optional[str] = None
+    feedback_round_2_status: Optional[str] = None
+    feedback_round_2_error: Optional[str] = None
     artifacts_gcs_prefix: Optional[str] = None
     has_diarization: Optional[bool] = None
     artifacts_error: Optional[str] = None
@@ -50,6 +62,16 @@ class SummarizeResponse(BaseModel):
     status: str
 
 
+class Round1FeedbackResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class Round2FeedbackResponse(BaseModel):
+    job_id: str
+    status: str
+
+
 class Segment(BaseModel):
     start: float
     end: float
@@ -60,6 +82,7 @@ class Word(BaseModel):
     start: float
     end: float
     word: str
+    speaker: Optional[str] = None
 
 
 class TranscriptResult(BaseModel):
@@ -85,6 +108,15 @@ class JobStatusResponse(BaseModel):
     llm_test_output: Optional[str]
     summary: Optional[Dict[str, object]]
     summary_error: Optional[str]
+    derived_metrics: Optional[Dict[str, object]] = None
+    feedback_round_1_status: Optional[str] = None
+    feedback_round_1: Optional[Dict[str, object]] = None
+    feedback_round_1_version: Optional[str] = None
+    feedback_round_1_error: Optional[str] = None
+    feedback_round_2_status: Optional[str] = None
+    feedback_round_2: Optional[Dict[str, object]] = None
+    feedback_round_2_version: Optional[str] = None
+    feedback_round_2_error: Optional[str] = None
     # Backward-compatible alias for older frontend clients.
     result: Optional[TranscriptResult] = None
     error: Optional[str]
