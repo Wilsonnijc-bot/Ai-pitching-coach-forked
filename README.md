@@ -106,13 +106,12 @@ Never expose these to frontend code.
 This repo includes:
 
 - `Procfile` for web process
-- `Aptfile` with `ffmpeg`
 
 Set buildpacks:
 
 ```bash
 heroku buildpacks:clear -a ai-pitching-coach
-heroku buildpacks:add --index 1 heroku-community/apt -a ai-pitching-coach
+heroku buildpacks:add --index 1 https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git -a ai-pitching-coach
 heroku buildpacks:add --index 2 heroku/python -a ai-pitching-coach
 ```
 
