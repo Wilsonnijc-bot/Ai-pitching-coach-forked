@@ -330,9 +330,27 @@ def process_transcription_job(
 
         if bucket_name:
             if cleanup_output:
-                delete_prefix(output_prefix, bucket=bucket_name)
+                try:
+                    delete_prefix(output_prefix, bucket=bucket_name)
+                except Exception:
+                    logger.warning(
+                        "job_id=%s cleanup_output_failed prefix=gs://%s/%s",
+                        job_id,
+                        bucket_name,
+                        output_prefix,
+                        exc_info=True,
+                    )
             if cleanup_audio and uploaded_audio:
-                delete_blob(bucket_name, audio_blob_path)
+                try:
+                    delete_blob(bucket_name, audio_blob_path)
+                except Exception:
+                    logger.warning(
+                        "job_id=%s cleanup_audio_failed uri=gs://%s/%s",
+                        job_id,
+                        bucket_name,
+                        audio_blob_path,
+                        exc_info=True,
+                    )
 
         shutil.rmtree(temp_dir, ignore_errors=True)
 

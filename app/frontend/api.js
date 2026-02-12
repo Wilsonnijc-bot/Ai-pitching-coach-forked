@@ -15,7 +15,12 @@ async function readErrorDetail(response, fallbackMessage) {
             return JSON.stringify(payload);
         }
         const text = await response.text();
-        return text || fallbackMessage;
+        const normalized = String(text || '').trim();
+        const looksLikeHtml = contentType.includes('text/html') || normalized.startsWith('<!DOCTYPE html') || normalized.startsWith('<html');
+        if (looksLikeHtml && normalized.toLowerCase().includes('application error')) {
+            return 'Backend temporarily unavailable (Heroku restart). Please retry in 10-20 seconds.';
+        }
+        return normalized || fallbackMessage;
     } catch {
         return fallbackMessage;
     }
