@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="https://public-frontend-cos.metadl.com/mgx/img/favicon_atoms.ico" type="image/x-icon">
+    <title>AI Pitching Coach</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+
+<body>
+    <!-- Mobile Menu Toggle -->
+    <button id="mobile-menu-toggle" class="mobile-menu-toggle" aria-label="Toggle menu">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12h18M3 6h18M3 18h18"></path>
+        </svg>
+    </button>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/4ebe2c65-75d7-4e1b-9381-b3672681034c.png" alt="Logo" class="sidebar-logo">
+            <h2 class="sidebar-title">AI Pitching Coach</h2>
+        </div>
+        
+        <nav class="sidebar-nav">
+            <a href="#home" class="nav-item active" data-route="home">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                </svg>
+                <span>Home</span>
+            </a>
+            
+            <a href="#studio" class="nav-item" data-route="studio">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span>Studio</span>
+            </a>
+            
+            <a href="#history" class="nav-item" data-route="history">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 3v18h18"></path>
+                    <path d="M18 17V9l-5 5-5-5v8"></path>
+                </svg>
+                <span>History</span>
+            </a>
+            
+            <a href="#settings" class="nav-item" data-route="settings">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3"></path>
+                </svg>
+                <span>Settings</span>
+            </a>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main id="main-content" class="main-content">
+        <!-- Content will be dynamically rendered here -->
+    </main>
+
+    <!-- Overlay for mobile menu -->
+    <div id="overlay" class="overlay"></div>
+
+    <script type="module" src="./api.js"></script>
+    <script type="module" src="./recorder.js"></script>
+    <script type="module" src="./deckUpload.js"></script>
+    <script type="module" src="./app.js"></script>
+</body>
+
+</html>
