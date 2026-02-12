@@ -7,7 +7,8 @@ Backend flow:
 ## Stack
 
 - FastAPI
-- Google Cloud Speech-to-Text V1 (`google-cloud-speech`)
+- Google Cloud Speech-to-Text V2 BatchRecognize (`chirp_2`)
+- Google Cloud Storage (input/output for batch recognition)
 - ffmpeg (audio -> WAV 16kHz mono)
 - PostgreSQL (when `DATABASE_URL` is set) or in-memory fallback
 - Deck extraction:
@@ -18,9 +19,10 @@ Backend flow:
 ## Backend Modules
 
 - `app/backend/web.py`: routes, CORS, upload size middleware, static frontend mount.
-- `app/backend/transcription.py`: file writes, deck processing, ffmpeg conversion, STT pipeline.
+- `app/backend/transcription.py`: file writes, deck processing, ffmpeg conversion, V2 STT pipeline.
 - `app/backend/deck_extractor.py`: deck parsing and text extraction.
-- `app/backend/google_stt.py`: credential loading + Speech client + response parsing.
+- `app/backend/gcs_utils.py`: GCS upload/download/list/delete helpers.
+- `app/backend/stt_v2.py`: Speech-to-Text V2 Chirp 2 batch request + output parsing.
 - `app/backend/llm_client.py`: GPTsAPI/OpenAI-compatible client for `llm_test`.
 - `app/backend/llm_gptsapi.py`: raw HTTP GPTsAPI client for async summary generation.
 - `app/backend/summarization.py`: background summary pipeline + JSON validation/repair retry.
@@ -56,7 +58,7 @@ Response:
 ```json
 {
   "job_id": "<uuid>",
-  "status": "queued|deck_processing|transcribing|done|failed",
+  "status": "queued|deck_processing|transcribing|uploading_audio_to_gcs|stt_batch_recognize|waiting_for_stt|parsing_results|summarizing|done|failed",
   "progress": 0,
   "transcript": {
     "full_text": "",
@@ -147,7 +149,11 @@ Required summary schema:
 
 - `queued` -> initial row created
 - `deck_processing` -> optional deck extraction and DB save (`progress=10`)
-- `transcribing` -> ffmpeg + Google STT (`progress` advances)
+- `transcribing` -> local ffmpeg conversion stage before GCS upload (`progress=10`)
+- `uploading_audio_to_gcs` -> converted WAV uploaded to `gs://<bucket>/jobs/<job_id>/audio.wav` (`progress=20`)
+- `stt_batch_recognize` -> V2 BatchRecognize request submitted (`progress=40`)
+- `waiting_for_stt` -> waiting for long-running operation (`progress=60`)
+- `parsing_results` -> reading/parsing V2 JSON output from GCS (`progress=80`)
 - `summarizing` -> GPTsAPI summary generation (`progress=70..90`)
 - `done` -> transcript + optional deck ready (`progress=100`)
 - `failed` -> error stored in DB
@@ -177,6 +183,12 @@ If `DATABASE_URL` is missing, in-memory storage is used (reset on restart).
 
 - Deck files are saved to: `data/decks/<job_id>/<sanitized_filename>`
 - Audio temp files are written to temp dirs and cleaned after processing.
+- STT V2 GCS objects:
+  - Input audio: `gs://<GCS_AUDIO_BUCKET>/jobs/<job_id>/audio.wav`
+  - Output JSON: `gs://<GCS_AUDIO_BUCKET>/jobs/<job_id>/stt_v2_output/`
+- Cleanup flags:
+  - `GCS_CLEANUP_AUDIO=true` (default)
+  - `GCS_CLEANUP_OUTPUT=true` (default)
 - Deck files are currently retained for debugging/replay in MVP; clear `data/decks/` as needed.
 
 ## Limits
@@ -197,6 +209,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 brew install ffmpeg
 export GOOGLE_APPLICATION_CREDENTIALS="/Users/nijiachen/Downloads/double-scholar-487115-b1-f20d293ef8d3.json"
+export GCP_PROJECT_ID="double-scholar-487115-b1"
+export GCP_SPEECH_LOCATION="us-central1"
+export GCS_AUDIO_BUCKET="audiosss1"
+# Optional cleanup toggles:
+export GCS_CLEANUP_AUDIO="true"
+export GCS_CLEANUP_OUTPUT="true"
 export GPTSAPI_KEY="YOUR_KEY_HERE"
 # Optional overrides:
 export GPTSAPI_BASE_URL="https://api.gptsapi.net/v1"
@@ -211,6 +229,8 @@ Create job with audio only:
 ```bash
 curl -F "audio=@/path/to/sample.webm" http://127.0.0.1:8000/api/jobs
 ```
+
+For STT V2 validation, use a sample longer than 60 seconds (for example ~2 minutes). V2 BatchRecognize uses GCS and does not require local chunking.
 
 Create job with audio + deck:
 
@@ -252,9 +272,24 @@ Use one of:
 - `GOOGLE_APPLICATION_CREDENTIALS`
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON`
 - `GOOGLE_APPLICATION_CREDENTIALS_B64`
+- `GCP_PROJECT_ID` (default: `double-scholar-487115-b1`)
+- `GCP_SPEECH_LOCATION` (default: `us-central1`)
+- `GCS_AUDIO_BUCKET` (default: `audiosss1`)
+- `GCS_CLEANUP_AUDIO` (optional, default `true`)
+- `GCS_CLEANUP_OUTPUT` (optional, default `true`)
 - `GPTSAPI_KEY` (required for `/api/jobs/{job_id}/llm_test` and `/api/jobs/{job_id}/summarize`)
 - `GPTSAPI_BASE_URL` (optional; default `https://api.gptsapi.net/v1`)
 - `GPTSAPI_MODEL` (optional; default `gpt-5.1-chat`)
 - `GPTSAPI_AUTH_MODE` (optional; `authorization` default, `x-api-key` supported)
 
 Never send Google credentials to frontend code.
+
+## Optional GCS Diagnostic
+
+Use this script to verify Storage access quickly:
+
+```bash
+python scripts/diag_gcs.py
+```
+
+It uploads a temporary text object, reads it back, then deletes it.
