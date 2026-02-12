@@ -297,6 +297,16 @@ Use one of:
 - `GPTSAPI_MODEL` (optional; default `gpt-5.1-chat`)
 - `GPTSAPI_AUTH_MODE` (optional; `authorization` default, `x-api-key` supported)
 
+Credential resolution order is:
+`GOOGLE_APPLICATION_CREDENTIALS_B64` -> `GOOGLE_APPLICATION_CREDENTIALS_JSON` -> `GOOGLE_APPLICATION_CREDENTIALS` -> ADC fallback.
+
+For Heroku, preferred setup is base64 credentials:
+
+```bash
+base64 -i /path/to/service-account.json | tr -d '\n'
+heroku config:set GOOGLE_APPLICATION_CREDENTIALS_B64="<paste_base64_here>" -a ai-pitching-coach
+```
+
 Never send Google credentials to frontend code.
 
 ## Optional GCS Diagnostic

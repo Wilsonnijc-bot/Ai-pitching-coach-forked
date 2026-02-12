@@ -8,6 +8,7 @@ from google.api_core.client_options import ClientOptions
 from google.cloud import speech_v2
 from google.cloud.speech_v2.types import cloud_speech
 
+from .gcp_auth import get_gcp_credentials
 from .gcs_utils import build_gs_uri, download_text, get_default_bucket, list_blobs, parse_gcs_uri
 from .models import duration_to_seconds
 
@@ -243,7 +244,14 @@ def transcribe_v2_chirp2_from_gcs(
     recognizer = f"projects/{project_id}/locations/{location}/recognizers/_"
 
     endpoint = f"{location}-speech.googleapis.com"
-    client = speech_v2.SpeechClient(client_options=ClientOptions(api_endpoint=endpoint))
+    credentials = get_gcp_credentials()
+    if credentials is not None:
+        client = speech_v2.SpeechClient(
+            client_options=ClientOptions(api_endpoint=endpoint),
+            credentials=credentials,
+        )
+    else:
+        client = speech_v2.SpeechClient(client_options=ClientOptions(api_endpoint=endpoint))
     def build_request(enable_diarization: bool) -> cloud_speech.BatchRecognizeRequest:
         features = cloud_speech.RecognitionFeatures(
             enable_automatic_punctuation=True,

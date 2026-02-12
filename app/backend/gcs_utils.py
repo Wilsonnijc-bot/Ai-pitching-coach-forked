@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
+from .gcp_auth import get_gcp_credentials, get_project_id_hint
+
 
 logger = logging.getLogger("uvicorn.error")
 _storage_client: Optional[storage.Client] = None
@@ -22,7 +24,12 @@ def get_default_bucket() -> str:
 def get_storage_client() -> storage.Client:
     global _storage_client
     if _storage_client is None:
-        _storage_client = storage.Client()
+        credentials = get_gcp_credentials()
+        project = get_project_id_hint()
+        if credentials is not None or project:
+            _storage_client = storage.Client(credentials=credentials, project=project)
+        else:
+            _storage_client = storage.Client()
     return _storage_client
 
 
