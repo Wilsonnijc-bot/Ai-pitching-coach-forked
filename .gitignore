@@ -16,6 +16,7 @@ logs/
 env/
 venv/
 ENV/
+.venv/
 .DS_Store
 .idea/
 *.iml

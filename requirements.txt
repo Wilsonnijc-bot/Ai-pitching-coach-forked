@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-multipart
+google-cloud-speech
+pydantic
+psycopg[binary]

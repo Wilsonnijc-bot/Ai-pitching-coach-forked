@@ -80,29 +80,45 @@ Response:
 }
 ```
 
-**2. Speech-to-Text Transcription**
+**2. Speech-to-Text Transcription (Async Job)**
 ```
-POST /api/stt
+POST /api/jobs
 Content-Type: multipart/form-data
 Field: audio (file)
 
+Immediate Response:
+{
+  "job_id": "<uuid>",
+  "status": "queued"
+}
+```
+
+```
+GET /api/jobs/{job_id}
+
 Response:
 {
-  "full_text": "Complete transcription text...",
-  "segments": [
-    {
-      "start": 0.0,
-      "end": 5.2,
-      "text": "Hello, I'm presenting..."
-    }
-  ],
-  "words": [
-    {
-      "start": 0.0,
-      "end": 0.5,
-      "word": "Hello"
-    }
-  ]
+  "job_id": "<uuid>",
+  "status": "queued | transcribing | done | failed",
+  "progress": 0-100,
+  "result": {
+    "full_text": "Complete transcription text...",
+    "segments": [
+      {
+        "start": 0.0,
+        "end": 5.2,
+        "text": "Hello, I'm presenting..."
+      }
+    ],
+    "words": [
+      {
+        "start": 0.0,
+        "end": 0.5,
+        "word": "Hello"
+      }
+    ]
+  } | null,
+  "error": "string | null"
 }
 ```
 

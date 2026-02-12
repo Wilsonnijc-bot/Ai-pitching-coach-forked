@@ -1,5 +1,7 @@
 // API configuration and wrapper functions
 const API_BASE_URL = 'http://localhost:8000';
+const JOB_POLL_INTERVAL_MS = 1500;
+const JOB_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Upload pitch deck file to backend
@@ -37,17 +39,51 @@ export async function transcribeAudio(audioBlob) {
     formData.append('audio', audioBlob, 'recording.webm');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/stt`, {
+        // Step 1: create async transcription job.
+        const createResponse = await fetch(`${API_BASE_URL}/api/jobs`, {
             method: 'POST',
             body: formData,
         });
 
-        if (!response.ok) {
-            throw new Error(`Transcription failed: ${response.statusText}`);
+        if (!createResponse.ok) {
+            const errorText = await createResponse.text();
+            throw new Error(`Transcription job creation failed (${createResponse.status}): ${errorText || createResponse.statusText}`);
         }
 
-        const result = await response.json();
-        return result;
+        const createPayload = await createResponse.json();
+        const jobId = createPayload.job_id;
+        if (!jobId) {
+            throw new Error('Transcription job creation returned no job_id.');
+        }
+
+        // Step 2: poll for completion.
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < JOB_TIMEOUT_MS) {
+            await new Promise(resolve => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+
+            const statusResponse = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, {
+                method: 'GET',
+            });
+
+            if (!statusResponse.ok) {
+                const errorText = await statusResponse.text();
+                throw new Error(`Polling transcription job failed (${statusResponse.status}): ${errorText || statusResponse.statusText}`);
+            }
+
+            const job = await statusResponse.json();
+            if (job.status === 'done') {
+                if (!job.result) {
+                    throw new Error('Transcription completed without result payload.');
+                }
+                return job.result;
+            }
+
+            if (job.status === 'failed') {
+                throw new Error(job.error || 'Transcription failed.');
+            }
+        }
+
+        throw new Error('Transcription timed out while waiting for job completion.');
     } catch (error) {
         console.error('Transcription error:', error);
         throw error;
