@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from typing import Callable, Optional
 
@@ -45,10 +46,28 @@ def _emit_stage(callback: Optional[StageCallback], status: str, progress: int) -
         callback(status, progress)
 
 
-def _normalize_batch_results(batch_results: cloud_speech.BatchRecognizeResults) -> dict:
+def _normalize_speaker_label(raw_speaker_label) -> Optional[str]:
+    if raw_speaker_label is None:
+        return None
+    value = str(raw_speaker_label).strip()
+    if not value:
+        return None
+
+    if value.isdigit():
+        return f"spk{int(value)}"
+
+    match = re.search(r"(\d+)", value)
+    if match:
+        return f"spk{int(match.group(1))}"
+
+    return value
+
+
+def _normalize_batch_results(batch_results: cloud_speech.BatchRecognizeResults) -> tuple[dict, bool]:
     full_text_parts: list[str] = []
     segments: list[dict] = []
     words: list[dict] = []
+    has_speaker_tags = False
 
     for result in batch_results.results:
         if not result.alternatives:
@@ -76,22 +95,29 @@ def _normalize_batch_results(batch_results: cloud_speech.BatchRecognizeResults) 
         )
 
         for word_info in alt_words:
+            speaker = _normalize_speaker_label(getattr(word_info, "speaker_label", None))
+            if speaker:
+                has_speaker_tags = True
             words.append(
                 {
                     "start": duration_to_seconds(word_info.start_offset),
                     "end": duration_to_seconds(word_info.end_offset),
                     "word": word_info.word,
+                    "speaker": speaker,
                 }
             )
 
-    return {
-        "full_text": " ".join(full_text_parts).strip(),
-        "segments": segments,
-        "words": words,
-    }
+    return (
+        {
+            "full_text": " ".join(full_text_parts).strip(),
+            "segments": segments,
+            "words": words,
+        },
+        has_speaker_tags,
+    )
 
 
-def _parse_batch_results_json(json_text: str) -> dict:
+def _parse_batch_results_json(json_text: str) -> tuple[dict, bool]:
     try:
         batch_results = cloud_speech.BatchRecognizeResults.from_json(json_text)
     except Exception:
@@ -129,7 +155,7 @@ def _extract_result_blob_names(
     return sorted(set(blob_names))
 
 
-def _merge_transcripts(results: list[dict]) -> dict:
+def _merge_transcripts(results: list[dict], speaker_flags: list[bool]) -> tuple[dict, bool]:
     full_text_parts: list[str] = []
     segments: list[dict] = []
     words: list[dict] = []
@@ -141,11 +167,14 @@ def _merge_transcripts(results: list[dict]) -> dict:
         segments.extend(result.get("segments", []))
         words.extend(result.get("words", []))
 
-    return {
-        "full_text": " ".join(full_text_parts).strip(),
-        "segments": segments,
-        "words": words,
-    }
+    return (
+        {
+            "full_text": " ".join(full_text_parts).strip(),
+            "segments": segments,
+            "words": words,
+        },
+        any(speaker_flags),
+    )
 
 
 def _read_results_from_gcs(
@@ -153,7 +182,7 @@ def _read_results_from_gcs(
     job_id: str,
     bucket: str,
     response: Optional[cloud_speech.BatchRecognizeResponse],
-) -> dict:
+) -> tuple[dict, bool]:
     output_prefix = build_output_prefix(job_id)
     last_errors: list[str] = []
 
@@ -167,6 +196,7 @@ def _read_results_from_gcs(
             continue
 
         parsed_results: list[dict] = []
+        parsed_has_speaker: list[bool] = []
         parse_errors: list[str] = []
 
         for blob_name in ordered_blob_names:
@@ -176,13 +206,15 @@ def _read_results_from_gcs(
                 continue
             try:
                 json_text = download_text(bucket, blob_name)
-                parsed_results.append(_parse_batch_results_json(json_text))
+                parsed_result, has_speaker = _parse_batch_results_json(json_text)
+                parsed_results.append(parsed_result)
+                parsed_has_speaker.append(has_speaker)
             except Exception as exc:
                 parse_errors.append(f"gs://{bucket}/{blob_name} -> {exc}")
                 continue
 
         if parsed_results:
-            return _merge_transcripts(parsed_results)
+            return _merge_transcripts(parsed_results, parsed_has_speaker)
 
         last_errors = parse_errors
         time.sleep(2)
@@ -212,31 +244,63 @@ def transcribe_v2_chirp2_from_gcs(
 
     endpoint = f"{location}-speech.googleapis.com"
     client = speech_v2.SpeechClient(client_options=ClientOptions(api_endpoint=endpoint))
-    request = cloud_speech.BatchRecognizeRequest(
-        recognizer=recognizer,
-        config=cloud_speech.RecognitionConfig(
-            auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-            language_codes=["en-US"],
-            model="chirp_2",
-            features=cloud_speech.RecognitionFeatures(
-                enable_automatic_punctuation=True,
-                enable_word_time_offsets=True,
+    def build_request(enable_diarization: bool) -> cloud_speech.BatchRecognizeRequest:
+        features = cloud_speech.RecognitionFeatures(
+            enable_automatic_punctuation=True,
+            enable_word_time_offsets=True,
+        )
+        if enable_diarization:
+            features.diarization_config = cloud_speech.SpeakerDiarizationConfig(
+                min_speaker_count=1,
+                max_speaker_count=2,
+            )
+
+        return cloud_speech.BatchRecognizeRequest(
+            recognizer=recognizer,
+            config=cloud_speech.RecognitionConfig(
+                auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+                language_codes=["en-US"],
+                model="chirp_2",
+                features=features,
             ),
-        ),
-        files=[cloud_speech.BatchRecognizeFileMetadata(uri=gcs_audio_uri)],
-        recognition_output_config=cloud_speech.RecognitionOutputConfig(
-            gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
-        ),
-    )
+            files=[cloud_speech.BatchRecognizeFileMetadata(uri=gcs_audio_uri)],
+            recognition_output_config=cloud_speech.RecognitionOutputConfig(
+                gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
+            ),
+        )
 
     _emit_stage(on_stage, "stt_batch_recognize", 40)
-    operation = client.batch_recognize(request=request)
-
-    _emit_stage(on_stage, "waiting_for_stt", 60)
+    diarization_requested = True
     try:
+        operation = client.batch_recognize(request=build_request(enable_diarization=True))
+        _emit_stage(on_stage, "waiting_for_stt", 60)
         response = operation.result(timeout=600)
-    except Exception as exc:
-        raise RuntimeError(f"Speech-to-Text V2 BatchRecognize failed: {exc}") from exc
+    except Exception as first_exc:
+        message = str(first_exc).lower()
+        if "diarization" not in message and "speaker" not in message:
+            raise RuntimeError(f"Speech-to-Text V2 BatchRecognize failed: {first_exc}") from first_exc
+
+        # Fallback path: continue without diarization instead of failing whole job.
+        diarization_requested = False
+        _emit_stage(on_stage, "stt_batch_recognize", 40)
+        try:
+            operation = client.batch_recognize(request=build_request(enable_diarization=False))
+            _emit_stage(on_stage, "waiting_for_stt", 60)
+            response = operation.result(timeout=600)
+        except Exception as second_exc:
+            raise RuntimeError(
+                "Speech-to-Text V2 BatchRecognize failed after retry without diarization: "
+                f"{second_exc}"
+            ) from second_exc
 
     _emit_stage(on_stage, "parsing_results", 80)
-    return _read_results_from_gcs(job_id=job_id, bucket=bucket, response=response)
+    transcript, has_diarization = _read_results_from_gcs(job_id=job_id, bucket=bucket, response=response)
+    return {
+        "transcript": transcript,
+        "has_diarization": has_diarization,
+        "diarization_requested": diarization_requested,
+        "model": "chirp_2",
+        "location": location,
+        "bucket": bucket,
+        "output_uri": output_uri,
+    }

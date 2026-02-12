@@ -22,7 +22,7 @@ Backend flow:
 - `app/backend/transcription.py`: file writes, deck processing, ffmpeg conversion, V2 STT pipeline.
 - `app/backend/deck_extractor.py`: deck parsing and text extraction.
 - `app/backend/gcs_utils.py`: GCS upload/download/list/delete helpers.
-- `app/backend/stt_v2.py`: Speech-to-Text V2 Chirp 2 batch request + output parsing.
+- `app/backend/stt_v2.py`: Speech-to-Text V2 Chirp 2 batch request + output parsing + speaker mapping.
 - `app/backend/llm_client.py`: GPTsAPI/OpenAI-compatible client for `llm_test`.
 - `app/backend/llm_gptsapi.py`: raw HTTP GPTsAPI client for async summary generation.
 - `app/backend/summarization.py`: background summary pipeline + JSON validation/repair retry.
@@ -168,6 +168,10 @@ If `DATABASE_URL` is set, backend auto-creates:
 `deck_assets` stores metadata + extracted text/JSON, not raw bytes.
 `transcription_jobs` also stores `llm_test_output` (TEXT, nullable).
 `transcription_jobs` also stores `summary_json` (JSONB, nullable) and `summary_error` (TEXT, nullable).
+`transcription_jobs` also stores:
+- `artifacts_gcs_prefix` (TEXT, nullable)
+- `has_diarization` (BOOLEAN, nullable)
+- `artifacts_error` (TEXT, nullable)
 
 For existing databases, schema update is automatic on startup:
 
@@ -175,6 +179,9 @@ For existing databases, schema update is automatic on startup:
 ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS llm_test_output TEXT NULL;
 ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS summary_json JSONB NULL;
 ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS summary_error TEXT NULL;
+ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS artifacts_gcs_prefix TEXT NULL;
+ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS has_diarization BOOLEAN NULL;
+ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS artifacts_error TEXT NULL;
 ```
 
 If `DATABASE_URL` is missing, in-memory storage is used (reset on restart).
@@ -186,9 +193,17 @@ If `DATABASE_URL` is missing, in-memory storage is used (reset on restart).
 - STT V2 GCS objects:
   - Input audio: `gs://<GCS_AUDIO_BUCKET>/jobs/<job_id>/audio.wav`
   - Output JSON: `gs://<GCS_AUDIO_BUCKET>/jobs/<job_id>/stt_v2_output/`
+  - Retained artifacts: `gs://<GCS_AUDIO_BUCKET>/jobs/<job_id>/artifacts/`
+    - `transcript.txt` (normalized full transcript text)
+    - `words.json` (word-level timestamps, includes `speaker` when present)
+    - `diarization.json` (speaker grouped turns + availability flag; emits a note if diarization is unavailable)
+    - `meta.json` (engine/model/location + artifact URIs + feature flags, including diarization requested/available)
 - Cleanup flags:
   - `GCS_CLEANUP_AUDIO=true` (default)
   - `GCS_CLEANUP_OUTPUT=true` (default)
+- `artifacts/` is retained (never auto-deleted by cleanup flags).
+
+If Chirp 2 / API rejects diarization config, backend retries without diarization and still completes the job.
 - Deck files are currently retained for debugging/replay in MVP; clear `data/decks/` as needed.
 
 ## Limits
@@ -293,3 +308,17 @@ python scripts/diag_gcs.py
 ```
 
 It uploads a temporary text object, reads it back, then deletes it.
+
+## Artifact Integration Test
+
+With backend running locally, verify transcript artifact persistence:
+
+```bash
+python scripts/test_stt_artifacts.py --audio /path/to/sample.webm
+```
+
+The script creates a job, polls until completion, then checks:
+- `transcript.txt`
+- `words.json`
+- `diarization.json`
+- `meta.json`

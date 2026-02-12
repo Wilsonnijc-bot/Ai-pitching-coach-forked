@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +10,15 @@ from fastapi import HTTPException, UploadFile
 
 from .constants import CHUNK_SIZE, MAX_UPLOAD_BYTES
 from .deck_extractor import extract_deck_text
-from .gcs_utils import delete_blob, delete_prefix, get_default_bucket, upload_file
+from .gcs_utils import (
+    build_gs_uri,
+    delete_blob,
+    delete_prefix,
+    get_default_bucket,
+    upload_file,
+    upload_json,
+    upload_text,
+)
 from .stt_v2 import build_audio_blob_path, build_output_prefix, transcribe_v2_chirp2_from_gcs
 from .storage import JobStore
 
@@ -86,6 +95,111 @@ def parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def build_artifacts_prefix(job_id: str) -> str:
+    return f"jobs/{job_id}/artifacts/"
+
+
+def _build_diarization_payload(words: list[dict], gap_seconds: float = 1.0) -> dict:
+    has_speaker_tags = any(bool(word.get("speaker")) for word in words)
+    if not has_speaker_tags:
+        return {
+            "speakers": [],
+            "word_speaker_tags_present": False,
+            "note": "diarization not returned by API/model",
+        }
+
+    sorted_words = sorted(words, key=lambda item: (float(item.get("start", 0.0)), float(item.get("end", 0.0))))
+
+    speaker_turns: dict[str, list[dict]] = {}
+    speaker_order: list[str] = []
+    current_speaker: Optional[str] = None
+    current_turn: Optional[dict] = None
+
+    for word in sorted_words:
+        speaker = word.get("speaker") or "unknown"
+        token = str(word.get("word") or "").strip()
+        if not token:
+            continue
+        start = float(word.get("start", 0.0) or 0.0)
+        end = float(word.get("end", 0.0) or 0.0)
+
+        if speaker not in speaker_turns:
+            speaker_turns[speaker] = []
+            speaker_order.append(speaker)
+
+        needs_new_turn = (
+            current_turn is None
+            or current_speaker != speaker
+            or (start - float(current_turn.get("end", start))) > gap_seconds
+        )
+        if needs_new_turn:
+            current_turn = {"start": start, "end": end, "text": token}
+            speaker_turns[speaker].append(current_turn)
+        else:
+            current_turn["end"] = max(float(current_turn["end"]), end)
+            current_turn["text"] = f"{current_turn['text']} {token}".strip()
+
+        current_speaker = speaker
+
+    speakers = [{"speaker": speaker, "turns": speaker_turns.get(speaker, [])} for speaker in speaker_order]
+    return {"speakers": speakers, "word_speaker_tags_present": True}
+
+
+def write_transcript_artifacts(
+    *,
+    job_id: str,
+    bucket_name: str,
+    transcript_result: dict,
+    model: str,
+    location: str,
+    diarization_requested: bool,
+) -> tuple[str, bool]:
+    artifacts_prefix = build_artifacts_prefix(job_id)
+    artifacts_prefix_uri = build_gs_uri(bucket_name, artifacts_prefix)
+
+    full_text = str(transcript_result.get("full_text") or "")
+    words = list(transcript_result.get("words") or [])
+    diarization_payload = _build_diarization_payload(words)
+    has_diarization = bool(diarization_payload.get("word_speaker_tags_present"))
+
+    transcript_uri = upload_text(
+        bucket_name,
+        f"{artifacts_prefix}transcript.txt",
+        full_text + "\n",
+        content_type="text/plain; charset=utf-8",
+    )
+    words_uri = upload_json(bucket_name, f"{artifacts_prefix}words.json", words)
+    diarization_uri = upload_json(bucket_name, f"{artifacts_prefix}diarization.json", diarization_payload)
+
+    meta_payload = {
+        "job_id": job_id,
+        "engine": "google-stt-v2",
+        "model": model,
+        "location": location,
+        "bucket": bucket_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "has_words": len(words) > 0,
+        "has_diarization": has_diarization,
+        "diarization_requested": diarization_requested,
+        "artifacts": {
+            "transcript_txt": transcript_uri,
+            "words_json": words_uri,
+            "diarization_json": diarization_uri,
+        },
+    }
+    meta_uri = upload_json(bucket_name, f"{artifacts_prefix}meta.json", meta_payload)
+
+    logger.info(
+        "job_id=%s artifacts_written transcript=%s words=%s diarization=%s meta=%s",
+        job_id,
+        transcript_uri,
+        words_uri,
+        diarization_uri,
+        meta_uri,
+    )
+    return artifacts_prefix_uri, has_diarization
+
+
 def convert_audio_to_wav_16khz_mono(input_path: Path, wav_path: Path) -> None:
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
@@ -127,6 +241,9 @@ def process_transcription_job(
     audio_blob_path = build_audio_blob_path(job_id)
     output_prefix = build_output_prefix(job_id)
     uploaded_audio = False
+    artifacts_error: Optional[str] = None
+    artifacts_gcs_prefix: Optional[str] = None
+    has_diarization: Optional[bool] = None
 
     try:
         if deck_upload is not None:
@@ -156,14 +273,45 @@ def process_transcription_job(
         def on_stage(status: str, progress: int) -> None:
             job_store.update_job(job_id, status=status, progress=progress, error=None)
 
-        result = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
-        job_store.update_job(job_id, status="done", progress=100, result=result, error=None)
+        stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
+        transcript_result = stt_payload.get("transcript", {})
+        has_diarization = bool(stt_payload.get("has_diarization", False))
+
+        job_store.update_job(job_id, progress=90)
+        try:
+            artifacts_gcs_prefix, artifact_has_diarization = write_transcript_artifacts(
+                job_id=job_id,
+                bucket_name=bucket_name,
+                transcript_result=transcript_result,
+                model=str(stt_payload.get("model") or "chirp_2"),
+                location=str(stt_payload.get("location") or "us-central1"),
+                diarization_requested=bool(stt_payload.get("diarization_requested", True)),
+            )
+            has_diarization = artifact_has_diarization
+        except Exception as artifact_exc:
+            artifacts_error = str(artifact_exc)
+            logger.warning(
+                "job_id=%s artifact_upload_failed error=%s",
+                job_id,
+                artifacts_error,
+            )
+
+        job_store.update_job(
+            job_id,
+            status="done",
+            progress=100,
+            result=transcript_result,
+            artifacts_gcs_prefix=artifacts_gcs_prefix,
+            has_diarization=has_diarization,
+            artifacts_error=artifacts_error,
+            error=None,
+        )
 
         logger.info(
             "job_id=%s transcript_done full_text_len=%s words=%s",
             job_id,
-            len(result.get("full_text", "")),
-            len(result.get("words", [])),
+            len(transcript_result.get("full_text", "")),
+            len(transcript_result.get("words", [])),
         )
     except Exception as exc:
         job_store.update_job(job_id, status="failed", progress=100, error=str(exc))
@@ -195,4 +343,3 @@ def process_deck_only_job(job_store: JobStore, job_id: str, deck_upload: dict) -
                 job_store.update_job(job_id, status="queued", progress=20, error=None)
     except Exception as exc:
         job_store.update_job(job_id, status="failed", progress=100, error=str(exc))
-

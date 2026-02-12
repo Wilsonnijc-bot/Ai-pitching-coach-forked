@@ -56,6 +56,9 @@ class JobStore(Protocol):
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        artifacts_gcs_prefix: object = UNSET,
+        has_diarization: object = UNSET,
+        artifacts_error: object = UNSET,
         error: object = UNSET,
     ) -> None:
         pass
@@ -102,6 +105,9 @@ class InMemoryJobStore:
                 llm_test_output=None,
                 summary_json=None,
                 summary_error=None,
+                artifacts_gcs_prefix=None,
+                has_diarization=None,
+                artifacts_error=None,
                 error=None,
             )
 
@@ -119,6 +125,9 @@ class InMemoryJobStore:
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        artifacts_gcs_prefix: object = UNSET,
+        has_diarization: object = UNSET,
+        artifacts_error: object = UNSET,
         error: object = UNSET,
     ) -> None:
         with self._lock:
@@ -135,6 +144,12 @@ class InMemoryJobStore:
                 job.summary_json = summary_json
             if summary_error is not UNSET:
                 job.summary_error = summary_error
+            if artifacts_gcs_prefix is not UNSET:
+                job.artifacts_gcs_prefix = artifacts_gcs_prefix
+            if has_diarization is not UNSET:
+                job.has_diarization = has_diarization
+            if artifacts_error is not UNSET:
+                job.artifacts_error = artifacts_error
             if error is not UNSET:
                 job.error = error
             job.updated_at = utc_now()
@@ -198,8 +213,12 @@ class PostgresJobStore:
                         status TEXT NOT NULL,
                         progress INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
                         result JSONB NULL,
+                        llm_test_output TEXT NULL,
                         summary_json JSONB NULL,
                         summary_error TEXT NULL,
+                        artifacts_gcs_prefix TEXT NULL,
+                        has_diarization BOOLEAN NULL,
+                        artifacts_error TEXT NULL,
                         error TEXT NULL
                     )
                     """
@@ -230,6 +249,24 @@ class PostgresJobStore:
                 )
                 cur.execute(
                     """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS artifacts_gcs_prefix TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS has_diarization BOOLEAN NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS artifacts_error TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS deck_assets (
                         job_id UUID PRIMARY KEY
                             REFERENCES transcription_jobs(job_id)
@@ -252,11 +289,33 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     INSERT INTO transcription_jobs (
-                        job_id, status, progress, result, llm_test_output, summary_json, summary_error, error
+                        job_id,
+                        status,
+                        progress,
+                        result,
+                        llm_test_output,
+                        summary_json,
+                        summary_error,
+                        artifacts_gcs_prefix,
+                        has_diarization,
+                        artifacts_error,
+                        error
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (job_id, "queued", 0, None, None, None, None, None),
+                    (
+                        job_id,
+                        "queued",
+                        0,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                 )
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
@@ -273,6 +332,9 @@ class PostgresJobStore:
                         tj.llm_test_output,
                         tj.summary_json,
                         tj.summary_error,
+                        tj.artifacts_gcs_prefix,
+                        tj.has_diarization,
+                        tj.artifacts_error,
                         tj.error,
                         da.filename,
                         da.content_type,
@@ -298,6 +360,9 @@ class PostgresJobStore:
                     llm_test_output,
                     summary_json,
                     summary_error,
+                    artifacts_gcs_prefix,
+                    has_diarization,
+                    artifacts_error,
                     error,
                     deck_filename,
                     deck_content_type,
@@ -331,6 +396,9 @@ class PostgresJobStore:
                     llm_test_output=llm_test_output,
                     summary_json=summary_json,
                     summary_error=summary_error,
+                    artifacts_gcs_prefix=artifacts_gcs_prefix,
+                    has_diarization=has_diarization,
+                    artifacts_error=artifacts_error,
                     error=error,
                 )
 
@@ -344,6 +412,9 @@ class PostgresJobStore:
         llm_test_output: object = UNSET,
         summary_json: object = UNSET,
         summary_error: object = UNSET,
+        artifacts_gcs_prefix: object = UNSET,
+        has_diarization: object = UNSET,
+        artifacts_error: object = UNSET,
         error: object = UNSET,
     ) -> None:
         assignments: List[str] = []
@@ -367,6 +438,15 @@ class PostgresJobStore:
         if summary_error is not UNSET:
             assignments.append("summary_error = %s")
             values.append(summary_error)
+        if artifacts_gcs_prefix is not UNSET:
+            assignments.append("artifacts_gcs_prefix = %s")
+            values.append(artifacts_gcs_prefix)
+        if has_diarization is not UNSET:
+            assignments.append("has_diarization = %s")
+            values.append(has_diarization)
+        if artifacts_error is not UNSET:
+            assignments.append("artifacts_error = %s")
+            values.append(artifacts_error)
         if error is not UNSET:
             assignments.append("error = %s")
             values.append(error)

@@ -28,6 +28,9 @@ class JobRecord:
     llm_test_output: Optional[str] = None
     summary_json: Optional[dict] = None
     summary_error: Optional[str] = None
+    artifacts_gcs_prefix: Optional[str] = None
+    has_diarization: Optional[bool] = None
+    artifacts_error: Optional[str] = None
     error: Optional[str] = None
 
 

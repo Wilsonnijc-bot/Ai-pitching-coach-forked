@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -51,6 +52,26 @@ def upload_bytes(bucket: str, blob_path: str, data: bytes, content_type: str) ->
     blob = client.bucket(bucket).blob(clean_path)
     blob.upload_from_string(data, content_type=content_type)
     return build_gs_uri(bucket, clean_path)
+
+
+def upload_text(
+    bucket: str,
+    blob_path: str,
+    text: str,
+    content_type: str = "text/plain; charset=utf-8",
+) -> str:
+    data = (text or "").encode("utf-8")
+    return upload_bytes(bucket, blob_path, data, content_type=content_type)
+
+
+def upload_json(bucket: str, blob_path: str, obj) -> str:
+    payload = json.dumps(obj, ensure_ascii=False)
+    return upload_bytes(
+        bucket,
+        blob_path,
+        payload.encode("utf-8"),
+        content_type="application/json",
+    )
 
 
 def upload_file(bucket: str, blob_path: str, local_path: Path, content_type: str) -> str:
