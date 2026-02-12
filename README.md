@@ -14,6 +14,21 @@ Backend for:
   - `DATABASE_URL` set -> PostgreSQL
   - `DATABASE_URL` missing -> in-memory (local fallback)
 
+## Backend Structure
+
+Transcription (part 1) is now grouped under `app/backend/`:
+
+- `app/backend/web.py`: FastAPI app, routes, middleware, frontend static mount.
+- `app/backend/transcription.py`: upload write, ffmpeg conversion, transcription job pipeline.
+- `app/backend/google_stt.py`: Google credential loading, Speech client setup, response parsing.
+- `app/backend/storage.py`: in-memory and PostgreSQL job stores.
+- `app/backend/models.py`: response schemas and job record model.
+- `app/backend/constants.py`: shared upload size/chunk constants.
+
+Entrypoint remains:
+
+- `main.py`: `from app.backend.web import app`
+
 ## API Contract
 
 ### Create Transcription Job
