@@ -1,6 +1,7 @@
 import logging
 import shutil
 import subprocess
+import wave
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from .storage import JobStore
 
 
 logger = logging.getLogger("uvicorn.error")
+MAX_SYNC_RECOGNIZE_SECONDS = 55.0
 
 
 async def write_upload_to_disk(
@@ -79,6 +81,162 @@ def process_deck_asset(
         job_store.update_job(job_id, progress=progress_done)
 
 
+def get_wav_duration_seconds(wav_path: Path) -> float:
+    with wave.open(str(wav_path), "rb") as source:
+        frame_rate = source.getframerate()
+        frame_count = source.getnframes()
+        if frame_rate <= 0:
+            return 0.0
+        return frame_count / float(frame_rate)
+
+
+def split_wav_into_sync_chunks(
+    wav_path: Path, *, max_chunk_seconds: float = MAX_SYNC_RECOGNIZE_SECONDS
+) -> list[tuple[Path, float]]:
+    if max_chunk_seconds <= 0:
+        raise ValueError("max_chunk_seconds must be positive.")
+
+    chunks: list[tuple[Path, float]] = []
+    with wave.open(str(wav_path), "rb") as source:
+        channels = source.getnchannels()
+        sample_width = source.getsampwidth()
+        frame_rate = source.getframerate()
+        bytes_per_frame = channels * sample_width
+        if frame_rate <= 0 or bytes_per_frame <= 0:
+            raise RuntimeError("Invalid WAV metadata after conversion.")
+
+        frames_per_chunk = max(1, int(max_chunk_seconds * frame_rate))
+        frames_consumed = 0
+        chunk_index = 0
+
+        while True:
+            chunk_bytes = source.readframes(frames_per_chunk)
+            if not chunk_bytes:
+                break
+
+            frames_in_chunk = len(chunk_bytes) // bytes_per_frame
+            if frames_in_chunk <= 0:
+                break
+
+            offset_seconds = frames_consumed / float(frame_rate)
+            chunk_path = wav_path.parent / f"chunk_{chunk_index:03d}.wav"
+
+            with wave.open(str(chunk_path), "wb") as chunk_writer:
+                chunk_writer.setnchannels(channels)
+                chunk_writer.setsampwidth(sample_width)
+                chunk_writer.setframerate(frame_rate)
+                chunk_writer.writeframes(chunk_bytes)
+
+            chunks.append((chunk_path, offset_seconds))
+            frames_consumed += frames_in_chunk
+            chunk_index += 1
+
+    return chunks
+
+
+def apply_time_offset_to_transcript(transcript: dict, offset_seconds: float) -> dict:
+    if offset_seconds <= 0:
+        return transcript
+
+    shifted_segments: list[dict] = []
+    for segment in transcript.get("segments", []):
+        shifted_segments.append(
+            {
+                "start": float(segment.get("start", 0.0) or 0.0) + offset_seconds,
+                "end": float(segment.get("end", 0.0) or 0.0) + offset_seconds,
+                "text": segment.get("text", ""),
+            }
+        )
+
+    shifted_words: list[dict] = []
+    for word in transcript.get("words", []):
+        shifted_words.append(
+            {
+                "start": float(word.get("start", 0.0) or 0.0) + offset_seconds,
+                "end": float(word.get("end", 0.0) or 0.0) + offset_seconds,
+                "word": word.get("word", ""),
+            }
+        )
+
+    return {
+        "full_text": transcript.get("full_text", ""),
+        "segments": shifted_segments,
+        "words": shifted_words,
+    }
+
+
+def merge_transcript_chunks(chunks: list[dict]) -> dict:
+    full_text_parts: list[str] = []
+    all_segments: list[dict] = []
+    all_words: list[dict] = []
+
+    for chunk in chunks:
+        chunk_text = str(chunk.get("full_text") or "").strip()
+        if chunk_text:
+            full_text_parts.append(chunk_text)
+        all_segments.extend(chunk.get("segments", []))
+        all_words.extend(chunk.get("words", []))
+
+    return {
+        "full_text": " ".join(full_text_parts).strip(),
+        "segments": all_segments,
+        "words": all_words,
+    }
+
+
+def transcribe_wav_with_sync_chunking(
+    *,
+    client: speech.SpeechClient,
+    config: speech.RecognitionConfig,
+    wav_path: Path,
+    job_store: JobStore,
+    job_id: str,
+) -> dict:
+    duration_seconds = get_wav_duration_seconds(wav_path)
+    if duration_seconds <= MAX_SYNC_RECOGNIZE_SECONDS:
+        with wav_path.open("rb") as wav_file:
+            wav_content = wav_file.read()
+        if not wav_content:
+            raise RuntimeError("Converted WAV audio is empty.")
+
+        response = client.recognize(config=config, audio=speech.RecognitionAudio(content=wav_content))
+        job_store.update_job(job_id, progress=85)
+        return parse_speech_response(response)
+
+    chunk_paths = split_wav_into_sync_chunks(wav_path, max_chunk_seconds=MAX_SYNC_RECOGNIZE_SECONDS)
+    if not chunk_paths:
+        raise RuntimeError("Failed to split long recording into STT chunks.")
+
+    logger.info(
+        "job_id=%s long_audio_detected duration_seconds=%.2f chunk_count=%s",
+        job_id,
+        duration_seconds,
+        len(chunk_paths),
+    )
+
+    chunk_results: list[dict] = []
+    total_chunks = len(chunk_paths)
+
+    for index, (chunk_path, offset_seconds) in enumerate(chunk_paths):
+        with chunk_path.open("rb") as chunk_file:
+            chunk_bytes = chunk_file.read()
+        if not chunk_bytes:
+            continue
+
+        response = client.recognize(
+            config=config,
+            audio=speech.RecognitionAudio(content=chunk_bytes),
+        )
+        parsed = parse_speech_response(response)
+        chunk_results.append(apply_time_offset_to_transcript(parsed, offset_seconds))
+
+        # Keep polling UI responsive while chunking long recordings.
+        progress = 60 + int(((index + 1) / total_chunks) * 30)
+        job_store.update_job(job_id, progress=min(progress, 89))
+
+    return merge_transcript_chunks(chunk_results)
+
+
 def process_transcription_job(
     job_store: JobStore,
     job_id: str,
@@ -120,11 +278,6 @@ def process_transcription_job(
 
         job_store.update_job(job_id, progress=60)
 
-        with wav_path.open("rb") as wav_file:
-            wav_content = wav_file.read()
-        if not wav_content:
-            raise RuntimeError("Converted WAV audio is empty.")
-
         client = build_speech_client()
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -133,10 +286,13 @@ def process_transcription_job(
             enable_automatic_punctuation=True,
             enable_word_time_offsets=True,
         )
-        audio = speech.RecognitionAudio(content=wav_content)
-        response = client.recognize(config=config, audio=audio)
-
-        result = parse_speech_response(response)
+        result = transcribe_wav_with_sync_chunking(
+            client=client,
+            config=config,
+            wav_path=wav_path,
+            job_store=job_store,
+            job_id=job_id,
+        )
         job_store.update_job(job_id, progress=90)
         job_store.update_job(job_id, status="done", progress=100, result=result, error=None)
 
