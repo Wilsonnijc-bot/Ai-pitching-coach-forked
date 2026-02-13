@@ -1,15 +1,21 @@
 // Deck upload functionality
 
 export class DeckUploader {
-    constructor(containerId) {
+    constructor(containerId, { onFileChange } = {}) {
         this.container = document.getElementById(containerId);
         this.uploadArea = null;
         this.fileInput = null;
         this.fileInfo = null;
         this.statusMessage = null;
         this.currentFile = null;
+        this._onFileChange = onFileChange || null;
         
         this.init();
+    }
+
+    /** Returns true when a valid deck file is attached and ready. */
+    hasDeck() {
+        return this.currentFile != null;
     }
 
     init() {
@@ -109,6 +115,7 @@ export class DeckUploader {
         this.currentFile = file;
         this.displayFileInfo(file);
         this.hideStatus();
+        if (this._onFileChange) this._onFileChange(true);
     }
 
     displayFileInfo(file) {
@@ -128,6 +135,7 @@ export class DeckUploader {
         this.fileInfo.classList.remove('active');
         this.uploadArea.style.display = 'block';
         this.hideStatus();
+        if (this._onFileChange) this._onFileChange(false);
     }
 
     async uploadFile() {

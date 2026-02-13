@@ -453,6 +453,16 @@ body {
     background-color: var(--primary-hover);
 }
 
+.record-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.record-button.no-deck {
+    background-color: var(--text-secondary);
+}
+
 .record-button.recording {
     background-color: #EF4444;
     animation: pulse 1.5s infinite;

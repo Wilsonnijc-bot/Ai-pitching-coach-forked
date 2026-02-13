@@ -253,7 +253,9 @@ class App {
             <div class="toast-area" id="toast-area"></div>
         `;
 
-        this.deckUploader = new DeckUploader('deck-upload-card');
+        this.deckUploader = new DeckUploader('deck-upload-card', {
+            onFileChange: (hasDeck) => this._onDeckChanged(hasDeck),
+        });
         this.setupRecording();
         this.setupTabs();
         this.setupStudioActions();
@@ -265,6 +267,9 @@ class App {
             this.renderSummary(null);
         }
         this.applyStudioLayout();
+
+        // Gate: disable recording until a deck is attached
+        this._applyDeckGate();
     }
 
     setupStudioActions() {
@@ -273,6 +278,36 @@ class App {
             newPracticeBtn.addEventListener('click', () => {
                 this.resetStudioState();
             });
+        }
+    }
+
+    /** Called by DeckUploader whenever a file is attached or removed. */
+    _onDeckChanged(hasDeck) {
+        this._applyDeckGate();
+    }
+
+    /** Enable / disable the record button based on deck presence. */
+    _applyDeckGate() {
+        const hasDeck = this.deckUploader && this.deckUploader.hasDeck();
+        const recordBtn = document.getElementById('record-btn');
+        const recordText = document.getElementById('record-text');
+        if (!recordBtn || !recordText) return;
+
+        // Don't interfere while busy / already recording
+        if (this.isRecording || this.isBusy || ['uploading', 'transcribing', 'feedbacking'].includes(this.stage)) {
+            return;
+        }
+
+        if (hasDeck) {
+            recordBtn.disabled = false;
+            recordBtn.classList.remove('no-deck');
+            recordText.textContent = 'Start recording';
+            this.setRecordingStatus('Deck attached — you\'re ready to record!', 'success', false);
+        } else {
+            recordBtn.disabled = true;
+            recordBtn.classList.add('no-deck');
+            recordText.textContent = 'Upload deck first';
+            this.setRecordingStatus('Upload your pitch deck on the left before recording.', 'info', false);
         }
     }
 
@@ -293,6 +328,12 @@ class App {
     }
 
     async startRecording() {
+        // Guard: require deck before recording
+        if (!this.deckUploader || !this.deckUploader.hasDeck()) {
+            this.setRecordingStatus('Please upload your pitch deck before recording.', 'error', false);
+            return;
+        }
+
         const timer = document.getElementById('timer');
 
         try {
@@ -1305,6 +1346,9 @@ class App {
         }
         this.setRecordButtonState('idle', false);
         this.applyStudioLayout();
+
+        // Re-apply deck gate after reset
+        this._applyDeckGate();
     }
 
     showToast(message, type = 'info') {
