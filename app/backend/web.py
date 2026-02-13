@@ -21,11 +21,18 @@ from .deck_extractor import (
     sanitize_filename,
     validate_deck_extension,
 )
+from .gcs_utils import (
+    download_blob_to_file,
+    ensure_bucket_cors,
+    generate_signed_upload_url,
+    get_default_bucket,
+)
 from .llm_client import run_llm_test_prompt
 from .models import (
     CreateJobResponse,
     JobStatusResponse,
     LLMTestResponse,
+    PrepareJobResponse,
     Round1FeedbackResponse,
     Round2FeedbackResponse,
     Round3FeedbackResponse,
@@ -69,6 +76,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _setup_gcs_cors() -> None:
+    """Ensure the GCS bucket allows direct browser uploads via signed URLs."""
+    try:
+        bucket_name = get_default_bucket()
+        ensure_bucket_cors(bucket_name)
+    except Exception:
+        logger.warning("Could not set GCS bucket CORS (non-fatal)", exc_info=True)
 
 
 @app.middleware("http")
@@ -173,6 +190,86 @@ async def create_transcription_job(
             deck_upload = await _save_deck_upload(job_id, deck)
     except Exception:
         job_store.delete_job(job_id)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
+        raise
+
+    background_tasks.add_task(
+        process_transcription_job,
+        job_store,
+        job_id,
+        input_path,
+        temp_dir,
+        deck_upload,
+    )
+    return CreateJobResponse(job_id=job_id, status="queued")
+
+
+@app.post("/api/jobs/prepare", response_model=PrepareJobResponse)
+def prepare_job() -> PrepareJobResponse:
+    """Create a job and return a GCS signed URL so the browser can upload
+    the video directly to Cloud Storage (bypassing Heroku's router timeout)."""
+    job_id = str(uuid.uuid4())
+    job_store.create_job(job_id)
+
+    bucket_name = get_default_bucket()
+    video_blob_path = f"jobs/{job_id}/video_upload.webm"
+    upload_url = generate_signed_upload_url(
+        bucket_name,
+        video_blob_path,
+        content_type="video/webm",
+        expiration_minutes=15,
+    )
+    logger.info("job_id=%s prepare_job signed_url_generated blob=%s", job_id, video_blob_path)
+    return PrepareJobResponse(
+        job_id=job_id,
+        upload_url=upload_url,
+        video_blob_path=video_blob_path,
+    )
+
+
+@app.post("/api/jobs/{job_id}/process", response_model=CreateJobResponse)
+async def start_processing(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    deck: Optional[UploadFile] = File(None),
+) -> CreateJobResponse:
+    """Start processing after the client has uploaded video directly to GCS.
+    Optionally attach a deck file in this request (decks are small enough
+    to go through Heroku)."""
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status not in ("queued", "pending", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is already being processed (status={job.status}).",
+        )
+
+    bucket_name = get_default_bucket()
+    video_blob_path = f"jobs/{job_id}/video_upload.webm"
+
+    # Download the video from GCS to a local temp file
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
+    input_path = temp_dir / "input.webm"
+    try:
+        download_blob_to_file(bucket_name, video_blob_path, input_path)
+    except FileNotFoundError:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Video not found in storage. Upload may have failed or expired.",
+        )
+
+    # Also stash the GCS URI for later replay
+    from .gcs_utils import build_gs_uri
+    job_store.update_job(job_id, video_gcs_uri=build_gs_uri(bucket_name, video_blob_path))
+
+    deck_upload = None
+    try:
+        if deck is not None:
+            deck_upload = await _save_deck_upload(job_id, deck)
+    except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
         raise

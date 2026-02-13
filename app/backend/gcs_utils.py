@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -188,3 +189,56 @@ def delete_prefix(prefix: str, bucket: Optional[str] = None) -> None:
                 blob.name,
                 exc_info=True,
             )
+
+
+def generate_signed_upload_url(
+    bucket: str,
+    blob_path: str,
+    content_type: str = "application/octet-stream",
+    expiration_minutes: int = 15,
+) -> str:
+    """Generate a V4 signed URL that allows the client to PUT a file directly
+    into GCS, bypassing the app server entirely."""
+    from .gcp_auth import get_gcp_credentials
+
+    client = get_storage_client()
+    clean_path = normalize_blob_path(blob_path)
+    blob_obj = client.bucket(bucket).blob(clean_path)
+    credentials = get_gcp_credentials()
+    url = blob_obj.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=expiration_minutes),
+        method="PUT",
+        content_type=content_type,
+        credentials=credentials,
+    )
+    return url
+
+
+def download_blob_to_file(bucket: str, blob_path: str, local_path: Path) -> None:
+    """Download a GCS object to a local file."""
+    client = get_storage_client()
+    clean_path = normalize_blob_path(blob_path)
+    blob_obj = client.bucket(bucket).blob(clean_path)
+    if not blob_obj.exists():
+        raise FileNotFoundError(f"GCS object not found: gs://{bucket}/{clean_path}")
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    blob_obj.download_to_filename(str(local_path))
+
+
+def ensure_bucket_cors(bucket: str) -> None:
+    """Set permissive CORS on the bucket so browsers can PUT via signed URLs."""
+    client = get_storage_client()
+    bucket_obj = client.get_bucket(bucket)
+    desired_cors = [
+        {
+            "origin": ["*"],
+            "method": ["PUT", "GET", "OPTIONS"],
+            "responseHeader": ["Content-Type", "Content-Length"],
+            "maxAgeSeconds": 3600,
+        }
+    ]
+    if bucket_obj.cors != desired_cors:
+        bucket_obj.cors = desired_cors
+        bucket_obj.patch()
+        logger.info("Updated CORS on bucket gs://%s", bucket)

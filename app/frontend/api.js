@@ -219,6 +219,93 @@ export async function startRound4Feedback(jobId) {
 }
 
 /**
+ * Prepare a job: creates the job on the server and returns a GCS signed URL
+ * for direct video upload (bypasses Heroku router timeout).
+ * @returns {Promise<{job_id:string, upload_url:string, video_blob_path:string}>}
+ */
+export async function prepareJob() {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/prepare`, {
+        method: 'POST',
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to prepare job (${response.status})`
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/**
+ * Upload a video blob directly to GCS via a signed URL.
+ * Uses XHR for upload progress tracking.
+ * @param {string} signedUrl  - GCS V4 signed PUT URL
+ * @param {Blob}   videoBlob  - The recorded video
+ * @param {Object} opts
+ * @param {Function} opts.onProgress - called with percentage (0-100)
+ * @returns {Promise<void>}
+ */
+export function uploadVideoToGCS(signedUrl, videoBlob, { onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', signedUrl, true);
+        xhr.setRequestHeader('Content-Type', 'video/webm');
+        xhr.timeout = 10 * 60 * 1000; // 10 minutes — no Heroku limit
+
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable && onProgress) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                onProgress(pct);
+            }
+        });
+
+        xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve();
+            } else {
+                reject(new Error(`GCS upload failed (HTTP ${xhr.status})`));
+            }
+        });
+
+        xhr.addEventListener('error', () =>
+            reject(new Error('Network error during GCS upload')));
+        xhr.addEventListener('timeout', () =>
+            reject(new Error('GCS upload timed out')));
+        xhr.addEventListener('abort', () =>
+            reject(new Error('GCS upload aborted')));
+
+        xhr.send(videoBlob);
+    });
+}
+
+/**
+ * Tell the backend to start processing a job whose video is already in GCS.
+ * Optionally attach a deck file (small, goes through Heroku).
+ * @param {string} jobId
+ * @param {File|null} deckFile
+ * @returns {Promise<{job_id:string, status:string}>}
+ */
+export async function startProcessing(jobId, deckFile = null) {
+    const formData = new FormData();
+    if (deckFile) {
+        formData.append('deck', deckFile, deckFile.name || 'deck');
+    }
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/process`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to start processing (${response.status})`
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/**
  * Check if backend is available
  * @returns {Promise<boolean>}
  */

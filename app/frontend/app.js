@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoToGCS, startProcessing } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -449,34 +449,54 @@ class App {
             this.round1RequestedForJobId = null;
             this.round2RequestedForJobId = null;
 
-            this.setRecordingStatus(
-                selectedDeck ? 'Uploading video + deck... 0%' : 'Uploading video... 0%',
-                'info',
-                true
-            );
+            let jobId;
+            try {
+                // ── GCS direct-upload flow (bypasses Heroku router timeout) ──
+                this.setRecordingStatus('Preparing upload...', 'info', true);
+                const prepared = await prepareJob();
+                jobId = prepared.job_id;
 
-            const uploadLabel = selectedDeck ? 'Uploading video + deck' : 'Uploading video';
-            const created = await createJob(videoBlob, selectedDeck, {
-                onProgress: (pct) => {
-                    this.setRecordingStatus(`${uploadLabel}... ${pct}%`, 'info', true);
-                },
-            });
-            if (!created.job_id) {
-                throw new Error('Backend did not return a job_id.');
+                this.setRecordingStatus('Uploading video... 0%', 'info', true);
+                await uploadVideoToGCS(prepared.upload_url, videoBlob, {
+                    onProgress: (pct) => {
+                        this.setRecordingStatus(`Uploading video... ${pct}%`, 'info', true);
+                    },
+                });
+
+                this.setRecordingStatus('Starting processing...', 'info', true);
+                await startProcessing(jobId, selectedDeck);
+            } catch (directErr) {
+                // ── Fallback: classic single-POST upload through Heroku ──
+                console.warn('Direct-upload flow failed, falling back to legacy upload:', directErr);
+                this.setRecordingStatus(
+                    selectedDeck ? 'Uploading video + deck... 0%' : 'Uploading video... 0%',
+                    'info',
+                    true
+                );
+                const uploadLabel = selectedDeck ? 'Uploading video + deck' : 'Uploading video';
+                const created = await createJob(videoBlob, selectedDeck, {
+                    onProgress: (pct) => {
+                        this.setRecordingStatus(`${uploadLabel}... ${pct}%`, 'info', true);
+                    },
+                });
+                if (!created.job_id) {
+                    throw new Error('Backend did not return a job_id.');
+                }
+                jobId = created.job_id;
             }
 
-            this.currentJobId = created.job_id;
+            this.currentJobId = jobId;
             this.currentJobData = null;
             this.transcriptionData = null;
             this.updateJobMeta({
-                job_id: created.job_id,
-                status: created.status || 'queued',
+                job_id: jobId,
+                status: 'queued',
                 progress: 0,
             });
             this.setStage('transcribing');
 
             const finishedJob = await this.pollJob({
-                jobId: created.job_id,
+                jobId: jobId,
                 timeoutMs: TRANSCRIPTION_TIMEOUT_MS,
                 intervalMs: TRANSCRIPTION_POLL_INTERVAL_MS,
                 phaseName: 'Transcription',
