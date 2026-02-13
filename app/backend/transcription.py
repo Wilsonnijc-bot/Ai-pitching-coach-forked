@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -253,24 +254,34 @@ def process_transcription_job(
         else:
             job_store.update_job(job_id, status="transcribing", progress=10, error=None)
 
-        # --- Upload original video to GCS for replay ---
+        # --- Upload video to GCS and convert audio in parallel ---
         bucket_name = get_default_bucket()
         video_blob_path = f"jobs/{job_id}/video{input_path.suffix}"
-        try:
-            gcs_video_uri = upload_file_resumable(
-                bucket_name,
-                video_blob_path,
-                input_path,
-                content_type="video/webm",
-            )
-            job_store.update_job(job_id, video_gcs_uri=gcs_video_uri)
-            logger.info("job_id=%s uploaded_video_to_gcs uri=%s", job_id, gcs_video_uri)
-        except Exception:
-            logger.warning("job_id=%s video_upload_failed", job_id, exc_info=True)
-
-        # --- Extract audio from video and upload WAV for STT ---
         wav_path = temp_dir / "audio.wav"
-        convert_audio_to_wav_16khz_mono(input_path, wav_path)
+
+        def _upload_video() -> Optional[str]:
+            try:
+                uri = upload_file_resumable(
+                    bucket_name,
+                    video_blob_path,
+                    input_path,
+                    content_type="video/webm",
+                )
+                job_store.update_job(job_id, video_gcs_uri=uri)
+                logger.info("job_id=%s uploaded_video_to_gcs uri=%s", job_id, uri)
+                return uri
+            except Exception:
+                logger.warning("job_id=%s video_upload_failed", job_id, exc_info=True)
+                return None
+
+        def _convert_audio() -> None:
+            convert_audio_to_wav_16khz_mono(input_path, wav_path)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            video_future: Future = pool.submit(_upload_video)
+            audio_future: Future = pool.submit(_convert_audio)
+            # Wait for audio conversion (critical path); video upload can finish later
+            audio_future.result()
 
         job_store.update_job(job_id, status="uploading_audio_to_gcs", progress=20, error=None)
         gcs_audio_uri = upload_file(
@@ -298,33 +309,51 @@ def process_transcription_job(
         derived_metrics = compute_derived_metrics(transcript_words)
         has_diarization = bool(stt_payload.get("has_diarization", False))
 
-        # --- Compute audio-level tone metrics while WAV is still on disk ---
+        # --- Compute tone + body-language metrics in parallel ---
+        def _compute_tone_metrics() -> dict:
+            result = {}
+            try:
+                from .metrics import compute_energy_timeline, compute_sentence_pacing
+                energy_timeline = compute_energy_timeline(wav_path, transcript_words)
+                sentence_pacing = compute_sentence_pacing(transcript_words)
+                if energy_timeline is not None:
+                    result["energy_timeline"] = energy_timeline
+                if sentence_pacing is not None:
+                    result["sentence_pacing"] = sentence_pacing
+            except Exception:
+                logger.warning("job_id=%s tone_metrics_failed", job_id, exc_info=True)
+            return result
+
+        def _compute_body_language() -> Optional[dict]:
+            try:
+                from .video_metrics import compute_body_language_metrics
+                bl = compute_body_language_metrics(input_path)
+                if bl is not None:
+                    logger.info(
+                        "job_id=%s body_language_metrics_done frames=%s",
+                        job_id,
+                        bl.get("summary", {}).get("total_frames_analyzed", 0),
+                    )
+                return bl
+            except Exception:
+                logger.warning("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            tone_future: Future = pool.submit(_compute_tone_metrics)
+            body_future: Future = pool.submit(_compute_body_language)
+            tone_result = tone_future.result()
+            body_language = body_future.result()
+
+        derived_metrics.update(tone_result)
+        if body_language is not None:
+            derived_metrics["body_language"] = body_language
+
+        # Ensure video upload finished (non-blocking wait)
         try:
-            from .metrics import compute_energy_timeline, compute_sentence_pacing
-
-            energy_timeline = compute_energy_timeline(wav_path, transcript_words)
-            sentence_pacing = compute_sentence_pacing(transcript_words)
-            if energy_timeline is not None:
-                derived_metrics["energy_timeline"] = energy_timeline
-            if sentence_pacing is not None:
-                derived_metrics["sentence_pacing"] = sentence_pacing
+            video_future.result(timeout=30)
         except Exception:
-            logger.warning("job_id=%s tone_metrics_failed", job_id, exc_info=True)
-
-        # --- Compute body-language metrics from video while file is on disk ---
-        try:
-            from .video_metrics import compute_body_language_metrics
-
-            body_language = compute_body_language_metrics(input_path)
-            if body_language is not None:
-                derived_metrics["body_language"] = body_language
-                logger.info(
-                    "job_id=%s body_language_metrics_done frames=%s",
-                    job_id,
-                    body_language.get("summary", {}).get("total_frames_analyzed", 0),
-                )
-        except Exception:
-            logger.warning("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
+            logger.warning("job_id=%s video_future_timeout_or_error", job_id, exc_info=True)
 
         job_store.update_job(job_id, progress=90)
         try:

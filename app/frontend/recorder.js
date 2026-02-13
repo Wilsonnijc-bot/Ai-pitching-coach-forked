@@ -19,8 +19,8 @@ export class VideoRecorder {
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
                     facingMode: 'user',
                 },
                 audio: {
@@ -52,7 +52,7 @@ export class VideoRecorder {
 
             this.mediaRecorder = new MediaRecorder(this.stream, {
                 mimeType: selectedMimeType,
-                videoBitsPerSecond: 1_000_000, // ~1 Mbps → ≈40 MB for 5 min
+                videoBitsPerSecond: 500_000, // ~500 Kbps at 640×480 → ≈19 MB for 5 min
             });
 
             this.mediaRecorder.ondataavailable = (event) => {

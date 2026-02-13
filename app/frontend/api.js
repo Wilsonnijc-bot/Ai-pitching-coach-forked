@@ -33,7 +33,7 @@ async function readErrorDetail(response, fallbackMessage) {
  * @param {File|null} deckFile
  * @returns {Promise<{job_id:string,status:string}>}
  */
-export async function createJob(videoBlob, deckFile = null) {
+export async function createJob(videoBlob, deckFile = null, { onProgress } = {}) {
     const formData = new FormData();
     formData.append('video', videoBlob, 'recording.webm');
     if (deckFile) {
@@ -45,39 +45,22 @@ export async function createJob(videoBlob, deckFile = null) {
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
-            const controller = new AbortController();
-            // 3-minute timeout for large video uploads
-            const timeoutId = setTimeout(() => controller.abort(), 3 * 60 * 1000);
-
-            const response = await fetch(`${API_BASE_URL}/api/jobs`, {
-                method: 'POST',
-                body: formData,
-                signal: controller.signal,
-            });
-
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-                const detail = await readErrorDetail(
-                    response,
-                    `Job creation failed (${response.status})`
-                );
-                // Don't retry on 4xx client errors (bad request, too large, etc.)
-                if (response.status >= 400 && response.status < 500) {
-                    throw new Error(detail);
-                }
-                lastError = new Error(detail);
-            } else {
-                return response.json();
-            }
+            const result = await _uploadWithProgress(
+                `${API_BASE_URL}/api/jobs`,
+                formData,
+                { timeoutMs: 3 * 60 * 1000, onProgress },
+            );
+            return result;
         } catch (err) {
             lastError = err;
-            // Don't retry if it was a deliberate abort or a 4xx error
-            if (err.name === 'AbortError') {
+            if (err.name === 'AbortError' || err.message.includes('timed out')) {
                 throw new Error('Upload timed out. Please check your connection and try again.');
             }
-            if (attempt < MAX_RETRIES - 1 && !err.message.includes('(4')) {
-                // Exponential backoff: 1s, 2s
+            // Don't retry on 4xx client errors
+            if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+                throw err;
+            }
+            if (attempt < MAX_RETRIES - 1) {
                 await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
                 continue;
             }
@@ -85,6 +68,49 @@ export async function createJob(videoBlob, deckFile = null) {
     }
 
     throw lastError || new Error('Upload failed after retries.');
+}
+
+/**
+ * Upload FormData using XMLHttpRequest for progress tracking.
+ * @returns {Promise<Object>} Parsed JSON response
+ */
+function _uploadWithProgress(url, formData, { timeoutMs = 180000, onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url, true);
+        xhr.timeout = timeoutMs;
+
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable && onProgress) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                onProgress(pct);
+            }
+        });
+
+        xhr.addEventListener('load', () => {
+            try {
+                const body = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(body);
+                } else {
+                    const detail = body?.detail || `Job creation failed (${xhr.status})`;
+                    const err = new Error(detail);
+                    err.statusCode = xhr.status;
+                    reject(err);
+                }
+            } catch {
+                const err = new Error(`Server error (${xhr.status})`);
+                err.statusCode = xhr.status;
+                reject(err);
+            }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
+        xhr.addEventListener('timeout', () => reject(new Error('Upload timed out. Please check your connection and try again.')));
+        xhr.addEventListener('abort', () => reject(new Error('Upload was cancelled.')));
+
+        xhr.send(formData);
+    });
 }
 
 /**

@@ -450,12 +450,17 @@ class App {
             this.round2RequestedForJobId = null;
 
             this.setRecordingStatus(
-                selectedDeck ? 'Uploading video + deck...' : 'Uploading video...',
+                selectedDeck ? 'Uploading video + deck... 0%' : 'Uploading video... 0%',
                 'info',
                 true
             );
 
-            const created = await createJob(videoBlob, selectedDeck);
+            const uploadLabel = selectedDeck ? 'Uploading video + deck' : 'Uploading video';
+            const created = await createJob(videoBlob, selectedDeck, {
+                onProgress: (pct) => {
+                    this.setRecordingStatus(`${uploadLabel}... ${pct}%`, 'info', true);
+                },
+            });
             if (!created.job_id) {
                 throw new Error('Backend did not return a job_id.');
             }

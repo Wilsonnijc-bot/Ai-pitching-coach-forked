@@ -139,7 +139,7 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
     try:
         with mp_pose.Pose(
             static_image_mode=False,
-            model_complexity=1,
+            model_complexity=0,  # fastest model — sufficient for shoulder tracking
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         ) as pose, mp_face_mesh.FaceMesh(
