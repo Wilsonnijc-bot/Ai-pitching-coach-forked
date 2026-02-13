@@ -219,9 +219,9 @@ export async function startRound4Feedback(jobId) {
 }
 
 /**
- * Prepare a job: creates the job on the server and returns a GCS signed URL
- * for direct video upload (bypasses Heroku router timeout).
- * @returns {Promise<{job_id:string, upload_url:string, video_blob_path:string}>}
+ * Prepare a job: creates a job shell on the server so video can be uploaded
+ * separately via the streaming endpoint.
+ * @returns {Promise<{job_id:string, status:string}>}
  */
 export async function prepareJob() {
     const response = await fetch(`${API_BASE_URL}/api/jobs/prepare`, {
@@ -238,49 +238,87 @@ export async function prepareJob() {
 }
 
 /**
- * Upload a video blob directly to GCS via a signed URL.
- * Uses XHR for upload progress tracking.
- * @param {string} signedUrl  - GCS V4 signed PUT URL
- * @param {Blob}   videoBlob  - The recorded video
+ * Upload video to the backend via the streaming proxy endpoint.
+ * Sends raw binary PUT, reads NDJSON progress lines back.
+ * This keeps data flowing in both directions, preventing Heroku's H28 timeout.
+ * @param {string} jobId
+ * @param {Blob}   videoBlob
  * @param {Object} opts
- * @param {Function} opts.onProgress - called with percentage (0-100)
+ * @param {Function} opts.onProgress - called with {bytes:number}
  * @returns {Promise<void>}
  */
-export function uploadVideoToGCS(signedUrl, videoBlob, { onProgress } = {}) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', signedUrl, true);
-        xhr.setRequestHeader('Content-Type', 'video/webm');
-        xhr.timeout = 10 * 60 * 1000; // 10 minutes — no Heroku limit
-
-        xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable && onProgress) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                onProgress(pct);
-            }
-        });
-
-        xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                resolve();
-            } else {
-                reject(new Error(`GCS upload failed (HTTP ${xhr.status})`));
-            }
-        });
-
-        xhr.addEventListener('error', () =>
-            reject(new Error('Network error during GCS upload')));
-        xhr.addEventListener('timeout', () =>
-            reject(new Error('GCS upload timed out')));
-        xhr.addEventListener('abort', () =>
-            reject(new Error('GCS upload aborted')));
-
-        xhr.send(videoBlob);
+export async function uploadVideoStreaming(jobId, videoBlob, { onProgress } = {}) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/upload-video`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: videoBlob,
     });
+
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Video upload failed (${response.status})`
+        );
+        throw new Error(detail);
+    }
+
+    // Read the NDJSON stream for progress and final status
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let lastStatus = null;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line in buffer
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+                const msg = JSON.parse(trimmed);
+                lastStatus = msg;
+                if (msg.status === 'uploading' && onProgress) {
+                    onProgress(msg);
+                } else if (msg.status === 'error') {
+                    throw new Error(msg.detail || 'Upload failed on server');
+                }
+            } catch (parseErr) {
+                if (parseErr.message && !parseErr.message.includes('JSON')) {
+                    throw parseErr; // re-throw our own Error from above
+                }
+                // ignore JSON parse failures for partial lines
+            }
+        }
+    }
+
+    // Process any remaining buffer
+    if (buffer.trim()) {
+        try {
+            const msg = JSON.parse(buffer.trim());
+            lastStatus = msg;
+            if (msg.status === 'error') {
+                throw new Error(msg.detail || 'Upload failed on server');
+            }
+        } catch (parseErr) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) {
+                throw parseErr;
+            }
+        }
+    }
+
+    if (!lastStatus || lastStatus.status !== 'done') {
+        throw new Error('Upload stream ended without confirmation');
+    }
 }
 
 /**
- * Tell the backend to start processing a job whose video is already in GCS.
+ * Tell the backend to start processing a job whose video has been uploaded.
  * Optionally attach a deck file (small, goes through Heroku).
  * @param {string} jobId
  * @param {File|null} deckFile

@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoToGCS, startProcessing } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, startProcessing } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -451,15 +451,17 @@ class App {
 
             let jobId;
             try {
-                // ── GCS direct-upload flow (bypasses Heroku router timeout) ──
+                // ── Streaming upload flow (keeps data flowing, prevents H28) ──
                 this.setRecordingStatus('Preparing upload...', 'info', true);
                 const prepared = await prepareJob();
                 jobId = prepared.job_id;
 
+                const videoSize = videoBlob.size;
                 this.setRecordingStatus('Uploading video... 0%', 'info', true);
-                await uploadVideoToGCS(prepared.upload_url, videoBlob, {
-                    onProgress: (pct) => {
-                        this.setRecordingStatus(`Uploading video... ${pct}%`, 'info', true);
+                await uploadVideoStreaming(jobId, videoBlob, {
+                    onProgress: ({ bytes }) => {
+                        const pct = videoSize > 0 ? Math.round((bytes / videoSize) * 100) : 0;
+                        this.setRecordingStatus(`Uploading video... ${Math.min(pct, 100)}%`, 'info', true);
                     },
                 });
 
@@ -467,7 +469,7 @@ class App {
                 await startProcessing(jobId, selectedDeck);
             } catch (directErr) {
                 // ── Fallback: classic single-POST upload through Heroku ──
-                console.warn('Direct-upload flow failed, falling back to legacy upload:', directErr);
+                console.warn('Streaming upload failed, falling back to legacy upload:', directErr);
                 this.setRecordingStatus(
                     selectedDeck ? 'Uploading video + deck... 0%' : 'Uploading video... 0%',
                     'info',

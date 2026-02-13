@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import shutil
@@ -8,7 +9,7 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .constants import MAX_REQUEST_BYTES, MAX_UPLOAD_BYTES
@@ -21,18 +22,11 @@ from .deck_extractor import (
     sanitize_filename,
     validate_deck_extension,
 )
-from .gcs_utils import (
-    download_blob_to_file,
-    ensure_bucket_cors,
-    generate_signed_upload_url,
-    get_default_bucket,
-)
 from .llm_client import run_llm_test_prompt
 from .models import (
     CreateJobResponse,
     JobStatusResponse,
     LLMTestResponse,
-    PrepareJobResponse,
     Round1FeedbackResponse,
     Round2FeedbackResponse,
     Round3FeedbackResponse,
@@ -64,6 +58,10 @@ ALLOWED_MIME_BY_EXTENSION = {
 app = FastAPI(title="AI Pitching Coach Backend")
 job_store = build_job_store()
 
+# Transient storage for upload temp paths (between upload and process calls).
+# Not persisted — only valid within the same dyno lifecycle.
+_upload_temp_paths: dict[str, dict] = {}
+
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
     "http://localhost:5173,http://127.0.0.1:5173",
@@ -78,19 +76,9 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def _setup_gcs_cors() -> None:
-    """Ensure the GCS bucket allows direct browser uploads via signed URLs."""
-    try:
-        bucket_name = get_default_bucket()
-        ensure_bucket_cors(bucket_name)
-    except Exception:
-        logger.warning("Could not set GCS bucket CORS (non-fatal)", exc_info=True)
-
-
 @app.middleware("http")
 async def enforce_upload_size(request, call_next):
-    if request.method == "POST" and request.url.path.startswith("/api/jobs"):
+    if request.method in ("POST", "PUT") and request.url.path.startswith("/api/jobs"):
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -205,26 +193,71 @@ async def create_transcription_job(
     return CreateJobResponse(job_id=job_id, status="queued")
 
 
-@app.post("/api/jobs/prepare", response_model=PrepareJobResponse)
-def prepare_job() -> PrepareJobResponse:
-    """Create a job and return a GCS signed URL so the browser can upload
-    the video directly to Cloud Storage (bypassing Heroku's router timeout)."""
+@app.post("/api/jobs/prepare", response_model=CreateJobResponse)
+def prepare_job() -> CreateJobResponse:
+    """Create a job shell so the client can upload video in a separate request.
+    Splitting prepare + upload lets us keep each request's data flowing
+    continuously, which avoids Heroku's H28 idle-connection timeout."""
     job_id = str(uuid.uuid4())
     job_store.create_job(job_id)
+    logger.info("job_id=%s prepare_job created", job_id)
+    return CreateJobResponse(job_id=job_id, status="created")
 
-    bucket_name = get_default_bucket()
-    video_blob_path = f"jobs/{job_id}/video_upload.webm"
-    upload_url = generate_signed_upload_url(
-        bucket_name,
-        video_blob_path,
-        content_type="video/webm",
-        expiration_minutes=15,
-    )
-    logger.info("job_id=%s prepare_job signed_url_generated blob=%s", job_id, video_blob_path)
-    return PrepareJobResponse(
-        job_id=job_id,
-        upload_url=upload_url,
-        video_blob_path=video_blob_path,
+
+@app.put("/api/jobs/{job_id}/upload-video")
+async def upload_video_streaming(
+    job_id: str,
+    request: Request,
+) -> StreamingResponse:
+    """Receive raw video bytes and stream NDJSON progress lines back.
+
+    The client sends the video as a raw binary PUT body (not multipart).
+    The server reads chunks, writes them to disk, and sends a progress
+    JSON line after every chunk.  This keeps data flowing in BOTH
+    directions, preventing Heroku's H28 (Client Connection Idle) timeout.
+
+    On success the last line is: {"status":"done","bytes":<total>}
+    On error:  {"status":"error","detail":"..."}
+    """
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
+    input_path = temp_dir / "input.webm"
+
+    async def _stream_progress():
+        total_bytes = 0
+        try:
+            input_path.parent.mkdir(parents=True, exist_ok=True)
+            with input_path.open("wb") as f:
+                async for chunk in request.stream():
+                    f.write(chunk)
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_UPLOAD_BYTES:
+                        yield json.dumps({"status": "error", "detail": "Video too large."}) + "\n"
+                        return
+                    # Send progress line back — keeps Heroku connection alive
+                    yield json.dumps({"status": "uploading", "bytes": total_bytes}) + "\n"
+
+            if total_bytes == 0:
+                yield json.dumps({"status": "error", "detail": "Empty video upload."}) + "\n"
+                return
+
+            # Stash the temp paths for the /process call
+            _upload_temp_paths[job_id] = {
+                "temp_dir": str(temp_dir),
+                "input_path": str(input_path),
+            }
+            yield json.dumps({"status": "done", "bytes": total_bytes}) + "\n"
+            logger.info("job_id=%s upload_video_streaming bytes=%d", job_id, total_bytes)
+        except Exception as exc:
+            logger.exception("job_id=%s upload_video_streaming error", job_id)
+            yield json.dumps({"status": "error", "detail": str(exc)}) + "\n"
+
+    return StreamingResponse(
+        _stream_progress(),
+        media_type="application/x-ndjson",
     )
 
 
@@ -234,43 +267,37 @@ async def start_processing(
     background_tasks: BackgroundTasks,
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
-    """Start processing after the client has uploaded video directly to GCS.
-    Optionally attach a deck file in this request (decks are small enough
-    to go through Heroku)."""
+    """Kick off transcription after the video has been uploaded via the
+    streaming endpoint.  Optionally attach a deck (small enough for Heroku)."""
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if job.status not in ("queued", "pending", "failed"):
+    if job.status not in ("queued", "pending", "created", "failed"):
         raise HTTPException(
             status_code=400,
             detail=f"Job is already being processed (status={job.status}).",
         )
 
-    bucket_name = get_default_bucket()
-    video_blob_path = f"jobs/{job_id}/video_upload.webm"
-
-    # Download the video from GCS to a local temp file
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
-    input_path = temp_dir / "input.webm"
-    try:
-        download_blob_to_file(bucket_name, video_blob_path, input_path)
-    except FileNotFoundError:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    # Retrieve the paths saved by the upload endpoint
+    paths = _upload_temp_paths.pop(job_id, None)
+    if not paths:
         raise HTTPException(
             status_code=400,
-            detail="Video not found in storage. Upload may have failed or expired.",
+            detail="Video has not been uploaded yet. Call PUT /upload-video first.",
         )
-
-    # Also stash the GCS URI for later replay
-    from .gcs_utils import build_gs_uri
-    job_store.update_job(job_id, video_gcs_uri=build_gs_uri(bucket_name, video_blob_path))
+    temp_dir = Path(paths["temp_dir"])
+    input_path = Path(paths["input_path"])
+    if not input_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded video file not found on disk. Please re-upload.",
+        )
 
     deck_upload = None
     try:
         if deck is not None:
             deck_upload = await _save_deck_upload(job_id, deck)
     except Exception:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
         raise
 

@@ -60,12 +60,6 @@ class CreateJobResponse(BaseModel):
     status: str
 
 
-class PrepareJobResponse(BaseModel):
-    job_id: str
-    upload_url: str
-    video_blob_path: str
-
-
 class LLMTestResponse(BaseModel):
     job_id: str
     status: str
