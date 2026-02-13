@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+test-results/
+scripts/
+*.md
+.git/
+.gitignore
+app/frontend/style.css
+app/frontend/package.json
+app/frontend/todo.md
+app/frontend/template_config.json
+app/frontend/README.md
