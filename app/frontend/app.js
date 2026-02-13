@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -475,35 +475,17 @@ class App {
                     console.warn('Direct GCS upload failed, falling back to streaming upload:', gcsErr.message);
                 }
 
-                // ── Fallback 1: Streaming upload through Heroku ──
+                // ── Fallback 1: Chunked upload (timeout-resilient) ──
                 if (!gcsUploadSucceeded) {
-                    try {
-                        const videoSize = videoBlob.size;
-                        this.setRecordingStatus('Uploading video... 0%', 'info', true);
-                        await uploadVideoStreaming(jobId, videoBlob, {
-                            onProgress: ({ bytes }) => {
-                                const pct = videoSize > 0 ? Math.round((bytes / videoSize) * 100) : 0;
-                                this.setRecordingStatus(`Uploading video... ${Math.min(pct, 100)}%`, 'info', true);
-                            },
-                        });
+                    this.setRecordingStatus('Uploading video... 0%', 'info', true);
+                    await uploadVideoChunked(jobId, videoBlob, {
+                        onProgress: ({ pct }) => {
+                            this.setRecordingStatus(`Uploading video... ${Math.min(pct, 100)}%`, 'info', true);
+                        },
+                    });
 
-                        this.setRecordingStatus('Starting processing...', 'info', true);
-                        await startProcessing(jobId, selectedDeck);
-                    } catch (streamErr) {
-                        // ── Fallback 2: Legacy single-POST upload ──
-                        console.warn('Streaming upload also failed, falling back to legacy upload:', streamErr.message);
-                        const uploadLabel = selectedDeck ? 'Uploading video + deck' : 'Uploading video';
-                        this.setRecordingStatus(`${uploadLabel}... 0%`, 'info', true);
-                        const created = await createJob(videoBlob, selectedDeck, {
-                            onProgress: (pct) => {
-                                this.setRecordingStatus(`${uploadLabel}... ${pct}%`, 'info', true);
-                            },
-                        });
-                        if (!created.job_id) {
-                            throw new Error('Backend did not return a job_id.');
-                        }
-                        jobId = created.job_id;
-                    }
+                    this.setRecordingStatus('Starting processing...', 'info', true);
+                    await startProcessing(jobId, selectedDeck);
                 }
             } catch (uploadErr) {
                 throw uploadErr;

@@ -227,24 +227,30 @@ def download_blob_to_file(bucket: str, blob_path: str, local_path: Path) -> None
 
 
 def ensure_bucket_cors(bucket: str) -> None:
-    """Set permissive CORS on the bucket so browsers can PUT via signed URLs."""
-    client = get_storage_client()
-    bucket_obj = client.get_bucket(bucket)
-    desired_cors = [
-        {
-            "origin": ["*"],
-            "method": ["PUT", "GET", "OPTIONS"],
-            "responseHeader": [
-                "Content-Type",
-                "Content-Length",
-                "Content-Range",
-                "ETag",
-                "x-goog-resumable",
-            ],
-            "maxAgeSeconds": 3600,
-        }
-    ]
-    if bucket_obj.cors != desired_cors:
-        bucket_obj.cors = desired_cors
-        bucket_obj.patch()
-        logger.info("Updated CORS on bucket gs://%s", bucket)
+    """Best-effort CORS update. Requires storage.buckets.get + update
+    permissions which the service account may not have.  When it fails
+    we just log a warning — CORS should be configured once via
+    ``gcloud storage buckets update`` instead."""
+    try:
+        client = get_storage_client()
+        bucket_obj = client.get_bucket(bucket)
+        desired_cors = [
+            {
+                "origin": ["*"],
+                "method": ["PUT", "GET", "OPTIONS"],
+                "responseHeader": [
+                    "Content-Type",
+                    "Content-Length",
+                    "Content-Range",
+                    "ETag",
+                    "x-goog-resumable",
+                ],
+                "maxAgeSeconds": 3600,
+            }
+        ]
+        if bucket_obj.cors != desired_cors:
+            bucket_obj.cors = desired_cors
+            bucket_obj.patch()
+            logger.info("Updated CORS on bucket gs://%s", bucket)
+    except Exception as exc:
+        logger.debug("ensure_bucket_cors skipped (non-fatal): %s", exc)

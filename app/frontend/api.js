@@ -318,6 +318,84 @@ export async function uploadVideoStreaming(jobId, videoBlob, { onProgress } = {}
 }
 
 /**
+ * Upload a video to the backend in small chunks.
+ *
+ * Each chunk is sent as a separate PATCH request, keeping every request
+ * fast enough to avoid Heroku's 30s / 55s timeouts.  Failed chunks are
+ * retried with exponential backoff.
+ *
+ * @param {string} jobId
+ * @param {Blob} videoBlob
+ * @param {Object} opts
+ * @param {function} [opts.onProgress]  – called with {bytes, total, pct}
+ * @param {number}   [opts.chunkSize]   – bytes per chunk (default 2 MB)
+ * @param {number}   [opts.maxRetries]  – retries per chunk (default 3)
+ * @returns {Promise<void>}
+ */
+export async function uploadVideoChunked(
+    jobId,
+    videoBlob,
+    { onProgress, chunkSize = 2 * 1024 * 1024, maxRetries = 3 } = {},
+) {
+    const totalSize = videoBlob.size;
+    let offset = 0;
+
+    while (offset < totalSize) {
+        const end = Math.min(offset + chunkSize, totalSize);
+        const chunk = videoBlob.slice(offset, end);
+        let lastErr;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const url =
+                    `${API_BASE_URL}/api/jobs/${jobId}/upload-chunk` +
+                    `?offset=${offset}&total_size=${totalSize}`;
+                const resp = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: chunk,
+                });
+
+                if (!resp.ok) {
+                    const detail = await readErrorDetail(
+                        resp,
+                        `Chunk upload failed (${resp.status})`,
+                    );
+                    throw new Error(detail);
+                }
+
+                const result = await resp.json();
+                // Advance to next chunk
+                offset = end;
+
+                if (onProgress) {
+                    onProgress({
+                        bytes: offset,
+                        total: totalSize,
+                        pct: Math.round((offset / totalSize) * 100),
+                    });
+                }
+
+                lastErr = null;
+                break; // success — move to next chunk
+            } catch (err) {
+                lastErr = err;
+                if (attempt < maxRetries) {
+                    // Exponential backoff: 1s, 2s, 4s
+                    await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+                }
+            }
+        }
+
+        if (lastErr) {
+            throw new Error(
+                `Upload failed at ${Math.round((offset / totalSize) * 100)}%: ${lastErr.message}`,
+            );
+        }
+    }
+}
+
+/**
  * Tell the backend to start processing a job whose video has been uploaded.
  * Optionally attach a deck file (small, goes through Heroku).
  * @param {string} jobId

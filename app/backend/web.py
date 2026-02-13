@@ -211,6 +211,71 @@ def prepare_job() -> CreateJobResponse:
     return CreateJobResponse(job_id=job_id, status="created")
 
 
+@app.patch("/api/jobs/{job_id}/upload-chunk")
+async def upload_chunk(
+    job_id: str,
+    request: Request,
+) -> dict:
+    """Receive a single chunk of the video file.
+
+    The client splits the video into small pieces (e.g. 2 MB) and sends
+    each one as a separate PATCH request.  Every request completes in a
+    few seconds, well within Heroku's 30-second / 55-second timeouts.
+
+    Query params
+    ----------
+    offset : int   – byte offset of this chunk in the full file
+    total_size : int – total size of the complete video file
+    """
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    try:
+        offset = int(request.query_params.get("offset", "0"))
+        total_size = int(request.query_params.get("total_size", "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="offset and total_size must be integers")
+
+    if total_size > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Video too large. Max {MAX_UPLOAD_BYTES} bytes.",
+        )
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty chunk body.")
+
+    # Reuse or create a temp directory for this job's upload
+    paths = _upload_temp_paths.get(job_id)
+    if paths:
+        temp_dir = Path(paths["temp_dir"])
+        input_path = Path(paths["input_path"])
+    else:
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
+        input_path = temp_dir / "input.webm"
+        _upload_temp_paths[job_id] = {
+            "temp_dir": str(temp_dir),
+            "input_path": str(input_path),
+        }
+
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write chunk at the correct offset
+    mode = "r+b" if input_path.exists() else "wb"
+    with input_path.open(mode) as f:
+        f.seek(offset)
+        f.write(body)
+
+    received = input_path.stat().st_size
+    complete = total_size > 0 and received >= total_size
+    return {
+        "received": received,
+        "complete": complete,
+    }
+
+
 @app.post("/api/jobs/{job_id}/upload-url")
 def get_direct_upload_url(job_id: str) -> dict:
     """Return a GCS signed URL so the browser can PUT the video directly
@@ -229,6 +294,7 @@ def get_direct_upload_url(job_id: str) -> dict:
     content_type = "application/octet-stream"
 
     try:
+        # Best-effort CORS — don't let it block signed URL generation
         ensure_bucket_cors(bucket)
         url = generate_signed_upload_url(
             bucket,
