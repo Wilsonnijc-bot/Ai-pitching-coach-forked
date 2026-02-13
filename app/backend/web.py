@@ -3,11 +3,12 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -68,6 +69,28 @@ job_store = build_job_store()
 # Transient storage for upload temp paths (between upload and process calls).
 # Not persisted — only valid within the same dyno lifecycle.
 _upload_temp_paths: dict[str, dict] = {}
+
+# Fixed temp root so all Uvicorn workers share the same path per job_id.
+_UPLOAD_TMP_ROOT = Path(tempfile.gettempdir()) / "ai_pitch_uploads"
+
+
+def _job_upload_paths(job_id: str) -> tuple[Path, Path]:
+    """Return a (temp_dir, input_path) pair that is deterministic for a
+    given *job_id*.  Because the path is derived from the job_id rather
+    than from a random tempdir, every Uvicorn worker process can locate
+    the uploaded file."""
+    d = _UPLOAD_TMP_ROOT / job_id
+    return d, d / "input.webm"
+
+
+def _fire_and_forget(fn, *args, **kwargs):
+    """Run *fn* in a daemon thread so the HTTP response is fully closed
+    before the work begins.  Starlette ``BackgroundTasks`` keeps the
+    connection open while the task runs, which triggers Heroku's H28
+    idle-connection timeout on long-running jobs."""
+    t = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
+    t.start()
+
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
@@ -164,7 +187,6 @@ def health() -> dict:
 
 @app.post("/api/jobs", response_model=CreateJobResponse)
 async def create_transcription_job(
-    background_tasks: BackgroundTasks,
     video: Optional[UploadFile] = File(None),
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
@@ -189,7 +211,7 @@ async def create_transcription_job(
         _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
         raise
 
-    background_tasks.add_task(
+    _fire_and_forget(
         process_transcription_job,
         job_store,
         job_id,
@@ -248,17 +270,12 @@ async def upload_chunk(
         raise HTTPException(status_code=400, detail="Empty chunk body.")
 
     # Reuse or create a temp directory for this job's upload
-    paths = _upload_temp_paths.get(job_id)
-    if paths:
-        temp_dir = Path(paths["temp_dir"])
-        input_path = Path(paths["input_path"])
-    else:
-        temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
-        input_path = temp_dir / "input.webm"
-        _upload_temp_paths[job_id] = {
-            "temp_dir": str(temp_dir),
-            "input_path": str(input_path),
-        }
+    temp_dir, input_path = _job_upload_paths(job_id)
+    # Also store in _upload_temp_paths for /process compatibility
+    _upload_temp_paths[job_id] = {
+        "temp_dir": str(temp_dir),
+        "input_path": str(input_path),
+    }
 
     input_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -322,7 +339,6 @@ def get_direct_upload_url(job_id: str) -> dict:
 @app.post("/api/jobs/{job_id}/process-gcs", response_model=CreateJobResponse)
 async def process_from_gcs(
     job_id: str,
-    background_tasks: BackgroundTasks,
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
     """Start transcription after the video has been uploaded directly to GCS
@@ -374,7 +390,7 @@ async def process_from_gcs(
         _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
         raise
 
-    background_tasks.add_task(
+    _fire_and_forget(
         process_transcription_job,
         job_store,
         job_id,
@@ -446,7 +462,6 @@ async def upload_video_streaming(
 @app.post("/api/jobs/{job_id}/process", response_model=CreateJobResponse)
 async def start_processing(
     job_id: str,
-    background_tasks: BackgroundTasks,
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
     """Kick off transcription after the video has been uploaded via the
@@ -460,19 +475,18 @@ async def start_processing(
             detail=f"Job is already being processed (status={job.status}).",
         )
 
-    # Retrieve the paths saved by the upload endpoint
+    # Retrieve the paths saved by the upload endpoint —
+    # fall back to the deterministic path so cross-worker calls work.
     paths = _upload_temp_paths.pop(job_id, None)
-    if not paths:
-        raise HTTPException(
-            status_code=400,
-            detail="Video has not been uploaded yet. Call PUT /upload-video first.",
-        )
-    temp_dir = Path(paths["temp_dir"])
-    input_path = Path(paths["input_path"])
+    if paths:
+        temp_dir = Path(paths["temp_dir"])
+        input_path = Path(paths["input_path"])
+    else:
+        temp_dir, input_path = _job_upload_paths(job_id)
     if not input_path.exists():
         raise HTTPException(
             status_code=400,
-            detail="Uploaded video file not found on disk. Please re-upload.",
+            detail="Video has not been uploaded yet. Call PUT /upload-video or PATCH /upload-chunk first.",
         )
 
     deck_upload = None
@@ -483,7 +497,7 @@ async def start_processing(
         _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
         raise
 
-    background_tasks.add_task(
+    _fire_and_forget(
         process_transcription_job,
         job_store,
         job_id,
@@ -497,7 +511,6 @@ async def start_processing(
 @app.post("/api/jobs/{job_id}/deck", response_model=CreateJobResponse)
 async def attach_deck_to_job(
     job_id: str,
-    background_tasks: BackgroundTasks,
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
     job = job_store.get_job(job_id)
@@ -507,7 +520,7 @@ async def attach_deck_to_job(
         raise HTTPException(status_code=400, detail="Missing deck file.")
 
     deck_upload = await _save_deck_upload(job_id, deck)
-    background_tasks.add_task(process_deck_only_job, job_store, job_id, deck_upload)
+    _fire_and_forget(process_deck_only_job, job_store, job_id, deck_upload)
     return CreateJobResponse(job_id=job_id, status="deck_processing")
 
 
@@ -549,7 +562,7 @@ def get_job_status(job_id: str) -> JobStatusResponse:
 
 
 @app.post("/api/jobs/{job_id}/summarize", response_model=SummarizeResponse)
-def summarize_job(job_id: str, background_tasks: BackgroundTasks) -> SummarizeResponse:
+def summarize_job(job_id: str) -> SummarizeResponse:
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -570,12 +583,12 @@ def summarize_job(job_id: str, background_tasks: BackgroundTasks) -> SummarizeRe
         summary_error=None,
         error=None,
     )
-    background_tasks.add_task(process_summary_job, job_store, job_id)
+    _fire_and_forget(process_summary_job, job_store, job_id)
     return SummarizeResponse(job_id=job_id, status="summarizing")
 
 
 @app.post("/api/jobs/{job_id}/feedback/round1", response_model=Round1FeedbackResponse)
-def generate_round1_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round1FeedbackResponse:
+def generate_round1_feedback(job_id: str) -> Round1FeedbackResponse:
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -601,12 +614,12 @@ def generate_round1_feedback(job_id: str, background_tasks: BackgroundTasks) -> 
         feedback_round_1_error=None,
         feedback_round_1_version="r1_v1",
     )
-    background_tasks.add_task(run_round1, job_store, job_id)
+    _fire_and_forget(run_round1, job_store, job_id)
     return Round1FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/feedback/round2", response_model=Round2FeedbackResponse)
-def generate_round2_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round2FeedbackResponse:
+def generate_round2_feedback(job_id: str) -> Round2FeedbackResponse:
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -632,12 +645,12 @@ def generate_round2_feedback(job_id: str, background_tasks: BackgroundTasks) -> 
         feedback_round_2_error=None,
         feedback_round_2_version="r2_v1",
     )
-    background_tasks.add_task(run_round2, job_store, job_id)
+    _fire_and_forget(run_round2, job_store, job_id)
     return Round2FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/feedback/round3", response_model=Round3FeedbackResponse)
-def generate_round3_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round3FeedbackResponse:
+def generate_round3_feedback(job_id: str) -> Round3FeedbackResponse:
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -663,12 +676,12 @@ def generate_round3_feedback(job_id: str, background_tasks: BackgroundTasks) -> 
         feedback_round_3_error=None,
         feedback_round_3_version="r3_v1",
     )
-    background_tasks.add_task(run_round3, job_store, job_id)
+    _fire_and_forget(run_round3, job_store, job_id)
     return Round3FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/feedback/round4", response_model=Round4FeedbackResponse)
-def generate_round4_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round4FeedbackResponse:
+def generate_round4_feedback(job_id: str) -> Round4FeedbackResponse:
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
@@ -694,7 +707,7 @@ def generate_round4_feedback(job_id: str, background_tasks: BackgroundTasks) -> 
         feedback_round_4_error=None,
         feedback_round_4_version="r4_v1",
     )
-    background_tasks.add_task(run_round4, job_store, job_id)
+    _fire_and_forget(run_round4, job_store, job_id)
     return Round4FeedbackResponse(job_id=job_id, status="running")
 
 
