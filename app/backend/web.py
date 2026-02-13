@@ -22,6 +22,13 @@ from .deck_extractor import (
     sanitize_filename,
     validate_deck_extension,
 )
+from .gcs_utils import (
+    build_gs_uri,
+    download_blob_to_file,
+    ensure_bucket_cors,
+    generate_signed_upload_url,
+    get_default_bucket,
+)
 from .llm_client import run_llm_test_prompt
 from .models import (
     CreateJobResponse,
@@ -202,6 +209,115 @@ def prepare_job() -> CreateJobResponse:
     job_store.create_job(job_id)
     logger.info("job_id=%s prepare_job created", job_id)
     return CreateJobResponse(job_id=job_id, status="created")
+
+
+@app.post("/api/jobs/{job_id}/upload-url")
+def get_direct_upload_url(job_id: str) -> dict:
+    """Return a GCS signed URL so the browser can PUT the video directly
+    to Cloud Storage, completely bypassing Heroku's router and its
+    55-second idle-connection (H28) timeout."""
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    try:
+        bucket = get_default_bucket()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    blob_path = f"jobs/{job_id}/video/input.webm"
+    content_type = "application/octet-stream"
+
+    try:
+        ensure_bucket_cors(bucket)
+        url = generate_signed_upload_url(
+            bucket,
+            blob_path,
+            content_type=content_type,
+            expiration_minutes=30,
+        )
+    except Exception as exc:
+        logger.warning("job_id=%s signed_url_generation_failed: %s", job_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not generate upload URL: {exc}",
+        ) from exc
+
+    return {
+        "upload_url": url,
+        "content_type": content_type,
+        "bucket": bucket,
+        "blob_path": blob_path,
+        "gcs_uri": build_gs_uri(bucket, blob_path),
+        "max_bytes": MAX_UPLOAD_BYTES,
+    }
+
+
+@app.post("/api/jobs/{job_id}/process-gcs", response_model=CreateJobResponse)
+async def process_from_gcs(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    deck: Optional[UploadFile] = File(None),
+) -> CreateJobResponse:
+    """Start transcription after the video has been uploaded directly to GCS
+    via a signed URL.  The server downloads the video from GCS to a local
+    temp directory, then runs the standard pipeline."""
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status not in ("queued", "pending", "created", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is already being processed (status={job.status}).",
+        )
+
+    try:
+        bucket = get_default_bucket()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    blob_path = f"jobs/{job_id}/video/input.webm"
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
+    input_path = temp_dir / "input.webm"
+
+    try:
+        download_blob_to_file(bucket, blob_path, input_path)
+    except FileNotFoundError:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Video not found in GCS. The upload may have failed — please try again.",
+        )
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to retrieve video from GCS: {exc}",
+        ) from exc
+
+    # Store the GCS URI so the pipeline can skip re-uploading the video
+    video_gcs_uri = build_gs_uri(bucket, blob_path)
+    job_store.update_job(job_id, video_gcs_uri=video_gcs_uri)
+
+    deck_upload = None
+    try:
+        if deck is not None:
+            deck_upload = await _save_deck_upload(job_id, deck)
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        _cleanup_deck_file(deck_upload["storage_path"] if deck_upload else None)
+        raise
+
+    background_tasks.add_task(
+        process_transcription_job,
+        job_store,
+        job_id,
+        input_path,
+        temp_dir,
+        deck_upload,
+    )
+    logger.info("job_id=%s process_from_gcs started", job_id)
+    return CreateJobResponse(job_id=job_id, status="queued")
 
 
 @app.put("/api/jobs/{job_id}/upload-video")

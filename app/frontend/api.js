@@ -358,3 +358,137 @@ export async function checkBackendHealth() {
         return false;
     }
 }
+
+
+// ─── Direct-to-GCS upload (bypasses Heroku router entirely) ───
+
+/**
+ * Get a signed URL for uploading video directly to GCS.
+ * @param {string} jobId
+ * @returns {Promise<{upload_url:string, content_type:string, bucket:string, blob_path:string, gcs_uri:string, max_bytes:number}>}
+ */
+export async function getUploadUrl(jobId) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/upload-url`, {
+        method: 'POST',
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to get upload URL (${response.status})`
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/**
+ * Upload a video blob directly to GCS via a signed URL using XHR for
+ * progress tracking.  This completely bypasses Heroku's router and its
+ * 55-second idle-connection (H28) timeout.
+ *
+ * Includes automatic retry with exponential backoff.
+ *
+ * @param {string}   uploadUrl   - GCS signed PUT URL
+ * @param {Blob}     videoBlob   - The recorded video
+ * @param {string}   contentType - Must match the signed URL's content-type
+ * @param {Object}   opts
+ * @param {Function} opts.onProgress - called with percentage (0-100)
+ * @param {number}   opts.maxRetries - default 3
+ * @returns {Promise<void>}
+ */
+export function uploadVideoDirectToGcs(
+    uploadUrl,
+    videoBlob,
+    contentType,
+    { onProgress, maxRetries = 3 } = {},
+) {
+    let attempt = 0;
+
+    function tryUpload() {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', uploadUrl, true);
+            xhr.setRequestHeader('Content-Type', contentType);
+
+            // No timeout — GCS handles large uploads fine.  The browser's
+            // network layer will error out if the connection drops.
+
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable && onProgress) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    onProgress(pct);
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve();
+                } else {
+                    const err = new Error(
+                        `GCS upload failed (HTTP ${xhr.status}): ${xhr.responseText?.slice(0, 200)}`
+                    );
+                    err.statusCode = xhr.status;
+                    reject(err);
+                }
+            });
+
+            xhr.addEventListener('error', () =>
+                reject(new Error('Network error during GCS upload.'))
+            );
+            xhr.addEventListener('abort', () =>
+                reject(new Error('GCS upload was cancelled.'))
+            );
+
+            xhr.send(videoBlob);
+        });
+    }
+
+    return (async () => {
+        let lastError;
+        for (attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                await tryUpload();
+                return; // success
+            } catch (err) {
+                lastError = err;
+                console.warn(`GCS upload attempt ${attempt + 1}/${maxRetries} failed:`, err.message);
+                // Don't retry on 4xx (bad signed URL, etc.)
+                if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+                    throw err;
+                }
+                if (attempt < maxRetries - 1) {
+                    const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+                    await new Promise(r => setTimeout(r, delay));
+                    if (onProgress) onProgress(0); // reset progress for retry
+                }
+            }
+        }
+        throw lastError || new Error('GCS upload failed after retries.');
+    })();
+}
+
+/**
+ * Tell the backend to start processing a job whose video was uploaded
+ * directly to GCS.  Optionally attach a deck file.
+ * @param {string}    jobId
+ * @param {File|null} deckFile
+ * @returns {Promise<{job_id:string, status:string}>}
+ */
+export async function processFromGcs(jobId, deckFile = null) {
+    const formData = new FormData();
+    if (deckFile) {
+        formData.append('deck', deckFile, deckFile.name || 'deck');
+    }
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/process-gcs`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to start GCS processing (${response.status})`
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}

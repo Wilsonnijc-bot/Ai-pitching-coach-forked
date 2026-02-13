@@ -234,7 +234,13 @@ def ensure_bucket_cors(bucket: str) -> None:
         {
             "origin": ["*"],
             "method": ["PUT", "GET", "OPTIONS"],
-            "responseHeader": ["Content-Type", "Content-Length"],
+            "responseHeader": [
+                "Content-Type",
+                "Content-Length",
+                "Content-Range",
+                "ETag",
+                "x-goog-resumable",
+            ],
             "maxAgeSeconds": 3600,
         }
     ]
