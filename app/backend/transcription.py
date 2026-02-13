@@ -311,6 +311,21 @@ def process_transcription_job(
         except Exception:
             logger.warning("job_id=%s tone_metrics_failed", job_id, exc_info=True)
 
+        # --- Compute body-language metrics from video while file is on disk ---
+        try:
+            from .video_metrics import compute_body_language_metrics
+
+            body_language = compute_body_language_metrics(input_path)
+            if body_language is not None:
+                derived_metrics["body_language"] = body_language
+                logger.info(
+                    "job_id=%s body_language_metrics_done frames=%s",
+                    job_id,
+                    body_language.get("summary", {}).get("total_frames_analyzed", 0),
+                )
+        except Exception:
+            logger.warning("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
+
         job_store.update_job(job_id, progress=90)
         try:
             artifacts_gcs_prefix, artifact_has_diarization = write_transcript_artifacts(

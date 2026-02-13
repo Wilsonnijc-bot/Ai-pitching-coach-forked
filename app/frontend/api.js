@@ -172,6 +172,27 @@ export async function startRound3Feedback(jobId) {
 }
 
 /**
+ * Start Round 4 (Body Language & Presence) feedback generation for an existing job.
+ * @param {string} jobId
+ * @returns {Promise<{job_id:string,status:string}>}
+ */
+export async function startRound4Feedback(jobId) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/feedback/round4`, {
+        method: 'POST',
+    });
+
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to start round 4 feedback (${response.status})`
+        );
+        throw new Error(detail);
+    }
+
+    return response.json();
+}
+
+/**
  * Check if backend is available
  * @returns {Promise<boolean>}
  */

@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -536,7 +536,8 @@ class App {
         const hasRound1 = this.hasRoundFeedback(job, 1);
         const hasRound2 = this.hasRoundFeedback(job, 2);
         const hasRound3 = this.hasRoundFeedback(job, 3);
-        if (hasRound1 && hasRound2 && hasRound3) {
+        const hasRound4 = this.hasRoundFeedback(job, 4);
+        if (hasRound1 && hasRound2 && hasRound3 && hasRound4) {
             this.renderSummary(this.getFeedbackFromJob(job));
             this.setSummaryStatus('All feedback rounds ready.', 'success', false);
             this.setStage('done');
@@ -558,7 +559,7 @@ class App {
         this.setStage('feedbacking');
         this.clearSummaryActions();
         this.setSummaryStatus(
-            isRetry ? 'Retrying professional feedback generation...' : 'Generating Round 1, Round 2, and Round 3 feedback...',
+            isRetry ? 'Retrying professional feedback generation...' : 'Generating Round 1, Round 2, Round 3, and Round 4 feedback...',
             'info',
             true
         );
@@ -658,6 +659,37 @@ class App {
             });
         }
 
+        const needsRound4 = !this.hasRoundFeedback(latestJob, 4);
+        if (needsRound4 && (isRetry || this.round4RequestedForJobId !== this.currentJobId)) {
+            await startRound4Feedback(this.currentJobId);
+            this.round4RequestedForJobId = this.currentJobId;
+        }
+
+        if (needsRound4) {
+            latestJob = await this.pollJob({
+                jobId: this.currentJobId,
+                timeoutMs: SUMMARY_TIMEOUT_MS,
+                intervalMs: SUMMARY_POLL_INTERVAL_MS,
+                phaseName: 'Round 4 feedback',
+                isComplete: (currentJob) => this.hasRoundFeedback(currentJob, 4),
+                isFailed: (currentJob) => {
+                    if (currentJob.feedback_round_4_status === 'failed') {
+                        return currentJob.feedback_round_4_error || 'Round 4 feedback failed.';
+                    }
+                    return null;
+                },
+                onTick: (currentJob) => {
+                    this.currentJobData = currentJob;
+                    this.updateJobMeta(currentJob);
+                    this.setSummaryStatus(
+                        `Generating Round 4 feedback... ${this.progressLabel(currentJob.progress)}`,
+                        'info',
+                        true
+                    );
+                },
+            });
+        }
+
         this.currentJobData = latestJob;
         const feedback = this.getFeedbackFromJob(latestJob);
         if (!feedback || !feedback.round1 || !feedback.round2) {
@@ -688,7 +720,7 @@ class App {
         const detail = error instanceof Error ? error.message : String(error || 'Unknown error');
         this.setStage('error');
         const partialFeedback = this.getFeedbackFromJob(this.currentJobData);
-        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.round3 || partialFeedback.legacy)) {
+        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.round3 || partialFeedback.round4 || partialFeedback.legacy)) {
             this.renderSummary(partialFeedback);
         }
         this.setSummaryStatus(`Feedback generation failed. Retry. ${detail}`, 'error', false);
@@ -814,9 +846,13 @@ class App {
             return;
         }
 
-        if (feedbackPayload.round1 || feedbackPayload.round2 || feedbackPayload.round3) {
+        if (feedbackPayload.round1 || feedbackPayload.round2 || feedbackPayload.round3 || feedbackPayload.round4) {
             const allSections = [];
-            // Round 3 (Vocal Tone & Energy) rendered FIRST
+            // Round 4 (Body Language & Presence) rendered FIRST
+            if (feedbackPayload.round4 && Array.isArray(feedbackPayload.round4.sections)) {
+                allSections.push(...feedbackPayload.round4.sections);
+            }
+            // Round 3 (Vocal Tone & Energy) rendered SECOND
             if (feedbackPayload.round3 && Array.isArray(feedbackPayload.round3.sections)) {
                 allSections.push(...feedbackPayload.round3.sections);
             }
@@ -832,6 +868,9 @@ class App {
                 .join('');
 
             let statusHtml = '';
+            if (!feedbackPayload.round4) {
+                statusHtml += '<p class="summary-muted">Round 4 (Body Language) feedback is not available yet.</p>';
+            }
             if (!feedbackPayload.round3) {
                 statusHtml += '<p class="summary-muted">Round 3 (Vocal Tone) feedback is not available yet.</p>';
             }
@@ -843,6 +882,16 @@ class App {
             }
 
             const actionBlocks = [];
+
+            const bodyActions = feedbackPayload.round4?.top_3_body_language_actions || [];
+            if (bodyActions.length > 0) {
+                actionBlocks.push(`
+                    <div class="feedback-action-card">
+                        <h4 class="subsection-label">Top Body Language Actions</h4>
+                        ${this.renderStringList(bodyActions, 'No body language actions provided')}
+                    </div>
+                `);
+            }
 
             const vocalActions = feedbackPayload.round3?.top_3_vocal_actions || [];
             if (vocalActions.length > 0) {
@@ -1285,7 +1334,7 @@ class App {
         if (!job || typeof job !== 'object') {
             return false;
         }
-        const keyMap = { 1: 'feedback_round_1', 2: 'feedback_round_2', 3: 'feedback_round_3' };
+        const keyMap = { 1: 'feedback_round_1', 2: 'feedback_round_2', 3: 'feedback_round_3', 4: 'feedback_round_4' };
         const key = keyMap[roundNumber];
         if (!key) return false;
         const payload = job[key];
@@ -1300,15 +1349,16 @@ class App {
         const round1 = this.hasRoundFeedback(job, 1) ? job.feedback_round_1 : null;
         const round2 = this.hasRoundFeedback(job, 2) ? job.feedback_round_2 : null;
         const round3 = this.hasRoundFeedback(job, 3) ? job.feedback_round_3 : null;
-        if (round1 || round2 || round3) {
-            return { round1, round2, round3, legacy: null };
+        const round4 = this.hasRoundFeedback(job, 4) ? job.feedback_round_4 : null;
+        if (round1 || round2 || round3 || round4) {
+            return { round1, round2, round3, round4, legacy: null };
         }
 
         const legacy = job.feedback || job.summary;
         if (!legacy || typeof legacy !== 'object') {
-            return { round1: null, round2: null, round3: null, legacy: null };
+            return { round1: null, round2: null, round3: null, round4: null, legacy: null };
         }
-        return { round1: null, round2: null, round3: null, legacy };
+        return { round1: null, round2: null, round3: null, round4: null, legacy };
     }
 
     progressLabel(progress) {

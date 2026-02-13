@@ -26,6 +26,8 @@ class DerivedMetrics(BaseModel):
     # Tone metrics (Optional — populated for new jobs with librosa)
     energy_timeline: Optional[list[dict]] = None
     sentence_pacing: Optional[list[dict]] = None
+    # Body language metrics (Optional — populated for new jobs with mediapipe)
+    body_language: Optional[dict] = None
 
 
 class SharedCoachingInput(BaseModel):

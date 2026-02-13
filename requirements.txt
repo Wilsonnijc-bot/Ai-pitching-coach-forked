@@ -12,3 +12,5 @@ httpx
 librosa>=0.10
 numpy
 soundfile
+mediapipe>=0.10
+opencv-python-headless>=4.8

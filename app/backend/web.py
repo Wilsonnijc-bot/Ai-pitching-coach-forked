@@ -15,6 +15,7 @@ from .constants import MAX_REQUEST_BYTES, MAX_UPLOAD_BYTES
 from .coaching_round1 import run_round1
 from .coaching_round2 import run_round2
 from .coaching_round3 import run_round3
+from .coaching_round4 import run_round4
 from .deck_extractor import (
     detect_extension,
     sanitize_filename,
@@ -28,6 +29,7 @@ from .models import (
     Round1FeedbackResponse,
     Round2FeedbackResponse,
     Round3FeedbackResponse,
+    Round4FeedbackResponse,
     SummarizeResponse,
 )
 from .summarization import process_summary_job
@@ -230,6 +232,10 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         feedback_round_3=job.feedback_round_3,
         feedback_round_3_version=job.feedback_round_3_version,
         feedback_round_3_error=job.feedback_round_3_error,
+        feedback_round_4_status=job.feedback_round_4_status,
+        feedback_round_4=job.feedback_round_4,
+        feedback_round_4_version=job.feedback_round_4_version,
+        feedback_round_4_error=job.feedback_round_4_error,
         result=job.result,
         video_gcs_uri=job.video_gcs_uri,
         error=job.error,
@@ -353,6 +359,37 @@ def generate_round3_feedback(job_id: str, background_tasks: BackgroundTasks) -> 
     )
     background_tasks.add_task(run_round3, job_store, job_id)
     return Round3FeedbackResponse(job_id=job_id, status="running")
+
+
+@app.post("/api/jobs/{job_id}/feedback/round4", response_model=Round4FeedbackResponse)
+def generate_round4_feedback(job_id: str, background_tasks: BackgroundTasks) -> Round4FeedbackResponse:
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    transcript_payload = job.result if isinstance(job.result, dict) else {}
+    transcript_text = str(
+        job.transcript_full_text or transcript_payload.get("full_text") or ""
+    ).strip()
+    if not transcript_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcript is missing for this job. Wait for transcription to finish first.",
+        )
+
+    if job.feedback_round_4_status == "done" and isinstance(job.feedback_round_4, dict):
+        return Round4FeedbackResponse(job_id=job_id, status="done")
+    if job.feedback_round_4_status == "running":
+        return Round4FeedbackResponse(job_id=job_id, status="running")
+
+    job_store.update_job(
+        job_id,
+        feedback_round_4_status="running",
+        feedback_round_4_error=None,
+        feedback_round_4_version="r4_v1",
+    )
+    background_tasks.add_task(run_round4, job_store, job_id)
+    return Round4FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/llm_test", response_model=LLMTestResponse)
