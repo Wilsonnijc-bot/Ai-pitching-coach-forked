@@ -505,6 +505,9 @@ class App {
                         jobId = created.job_id;
                     }
                 }
+            } catch (uploadErr) {
+                throw uploadErr;
+            }
 
             this.currentJobId = jobId;
             this.currentJobData = null;
