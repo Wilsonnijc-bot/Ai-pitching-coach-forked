@@ -40,6 +40,10 @@ class JobRecord:
     feedback_round_2_version: Optional[str] = None
     feedback_round_2_status: Optional[str] = None
     feedback_round_2_error: Optional[str] = None
+    feedback_round_3: Optional[dict] = None
+    feedback_round_3_version: Optional[str] = None
+    feedback_round_3_status: Optional[str] = None
+    feedback_round_3_error: Optional[str] = None
     artifacts_gcs_prefix: Optional[str] = None
     has_diarization: Optional[bool] = None
     artifacts_error: Optional[str] = None
@@ -69,6 +73,11 @@ class Round1FeedbackResponse(BaseModel):
 
 
 class Round2FeedbackResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class Round3FeedbackResponse(BaseModel):
     job_id: str
     status: str
 
@@ -118,6 +127,10 @@ class JobStatusResponse(BaseModel):
     feedback_round_2: Optional[Dict[str, object]] = None
     feedback_round_2_version: Optional[str] = None
     feedback_round_2_error: Optional[str] = None
+    feedback_round_3_status: Optional[str] = None
+    feedback_round_3: Optional[Dict[str, object]] = None
+    feedback_round_3_version: Optional[str] = None
+    feedback_round_3_error: Optional[str] = None
     # Backward-compatible alias for older frontend clients.
     result: Optional[TranscriptResult] = None
     video_gcs_uri: Optional[str] = None

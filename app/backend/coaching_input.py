@@ -23,6 +23,9 @@ class DerivedMetrics(BaseModel):
     filler_count: int
     filler_rate_per_min: float
     top_fillers: list[dict]
+    # Tone metrics (Optional — populated for new jobs with librosa)
+    energy_timeline: Optional[list[dict]] = None
+    sentence_pacing: Optional[list[dict]] = None
 
 
 class SharedCoachingInput(BaseModel):

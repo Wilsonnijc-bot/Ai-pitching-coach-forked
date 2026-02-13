@@ -298,6 +298,19 @@ def process_transcription_job(
         derived_metrics = compute_derived_metrics(transcript_words)
         has_diarization = bool(stt_payload.get("has_diarization", False))
 
+        # --- Compute audio-level tone metrics while WAV is still on disk ---
+        try:
+            from .metrics import compute_energy_timeline, compute_sentence_pacing
+
+            energy_timeline = compute_energy_timeline(wav_path, transcript_words)
+            sentence_pacing = compute_sentence_pacing(transcript_words)
+            if energy_timeline is not None:
+                derived_metrics["energy_timeline"] = energy_timeline
+            if sentence_pacing is not None:
+                derived_metrics["sentence_pacing"] = sentence_pacing
+        except Exception:
+            logger.warning("job_id=%s tone_metrics_failed", job_id, exc_info=True)
+
         job_store.update_job(job_id, progress=90)
         try:
             artifacts_gcs_prefix, artifact_has_diarization = write_transcript_artifacts(

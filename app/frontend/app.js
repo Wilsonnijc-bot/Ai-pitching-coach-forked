@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -26,6 +26,7 @@ class App {
         this.stage = 'idle';
         this.round1RequestedForJobId = null;
         this.round2RequestedForJobId = null;
+        this.round3RequestedForJobId = null;
 
         this.init();
     }
@@ -534,9 +535,10 @@ class App {
 
         const hasRound1 = this.hasRoundFeedback(job, 1);
         const hasRound2 = this.hasRoundFeedback(job, 2);
-        if (hasRound1 && hasRound2) {
+        const hasRound3 = this.hasRoundFeedback(job, 3);
+        if (hasRound1 && hasRound2 && hasRound3) {
             this.renderSummary(this.getFeedbackFromJob(job));
-            this.setSummaryStatus('Round 1 and Round 2 feedback ready.', 'success', false);
+            this.setSummaryStatus('All feedback rounds ready.', 'success', false);
             this.setStage('done');
             return;
         }
@@ -556,7 +558,7 @@ class App {
         this.setStage('feedbacking');
         this.clearSummaryActions();
         this.setSummaryStatus(
-            isRetry ? 'Retrying professional feedback generation...' : 'Generating Round 1 and Round 2 feedback...',
+            isRetry ? 'Retrying professional feedback generation...' : 'Generating Round 1, Round 2, and Round 3 feedback...',
             'info',
             true
         );
@@ -625,15 +627,46 @@ class App {
             });
         }
 
+        const needsRound3 = !this.hasRoundFeedback(latestJob, 3);
+        if (needsRound3 && (isRetry || this.round3RequestedForJobId !== this.currentJobId)) {
+            await startRound3Feedback(this.currentJobId);
+            this.round3RequestedForJobId = this.currentJobId;
+        }
+
+        if (needsRound3) {
+            latestJob = await this.pollJob({
+                jobId: this.currentJobId,
+                timeoutMs: SUMMARY_TIMEOUT_MS,
+                intervalMs: SUMMARY_POLL_INTERVAL_MS,
+                phaseName: 'Round 3 feedback',
+                isComplete: (currentJob) => this.hasRoundFeedback(currentJob, 3),
+                isFailed: (currentJob) => {
+                    if (currentJob.feedback_round_3_status === 'failed') {
+                        return currentJob.feedback_round_3_error || 'Round 3 feedback failed.';
+                    }
+                    return null;
+                },
+                onTick: (currentJob) => {
+                    this.currentJobData = currentJob;
+                    this.updateJobMeta(currentJob);
+                    this.setSummaryStatus(
+                        `Generating Round 3 feedback... ${this.progressLabel(currentJob.progress)}`,
+                        'info',
+                        true
+                    );
+                },
+            });
+        }
+
         this.currentJobData = latestJob;
         const feedback = this.getFeedbackFromJob(latestJob);
         if (!feedback || !feedback.round1 || !feedback.round2) {
             throw new Error('Round feedback payload is incomplete.');
         }
         this.renderSummary(feedback);
-        this.setSummaryStatus('Round 1 and Round 2 feedback generated successfully.', 'success', false);
+        this.setSummaryStatus('All feedback rounds generated successfully.', 'success', false);
         this.setStage('done');
-        this.showToast('Round 1 and Round 2 feedback generated successfully.', 'info');
+        this.showToast('All feedback rounds generated successfully.', 'info');
     }
 
     async retryFeedbackGeneration() {
@@ -655,7 +688,7 @@ class App {
         const detail = error instanceof Error ? error.message : String(error || 'Unknown error');
         this.setStage('error');
         const partialFeedback = this.getFeedbackFromJob(this.currentJobData);
-        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.legacy)) {
+        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.round3 || partialFeedback.legacy)) {
             this.renderSummary(partialFeedback);
         }
         this.setSummaryStatus(`Feedback generation failed. Retry. ${detail}`, 'error', false);
@@ -781,8 +814,12 @@ class App {
             return;
         }
 
-        if (feedbackPayload.round1 || feedbackPayload.round2) {
+        if (feedbackPayload.round1 || feedbackPayload.round2 || feedbackPayload.round3) {
             const allSections = [];
+            // Round 3 (Vocal Tone & Energy) rendered FIRST
+            if (feedbackPayload.round3 && Array.isArray(feedbackPayload.round3.sections)) {
+                allSections.push(...feedbackPayload.round3.sections);
+            }
             if (feedbackPayload.round1 && Array.isArray(feedbackPayload.round1.sections)) {
                 allSections.push(...feedbackPayload.round1.sections);
             }
@@ -795,6 +832,9 @@ class App {
                 .join('');
 
             let statusHtml = '';
+            if (!feedbackPayload.round3) {
+                statusHtml += '<p class="summary-muted">Round 3 (Vocal Tone) feedback is not available yet.</p>';
+            }
             if (!feedbackPayload.round1) {
                 statusHtml += '<p class="summary-muted">Round 1 feedback is not available yet.</p>';
             }
@@ -803,6 +843,17 @@ class App {
             }
 
             const actionBlocks = [];
+
+            const vocalActions = feedbackPayload.round3?.top_3_vocal_actions || [];
+            if (vocalActions.length > 0) {
+                actionBlocks.push(`
+                    <div class="feedback-action-card">
+                        <h4 class="subsection-label">Top Vocal Actions</h4>
+                        ${this.renderStringList(vocalActions, 'No vocal actions provided')}
+                    </div>
+                `);
+            }
+
             const thirtySecond = feedbackPayload.round2?.tightened_30_second_structure
                 || feedbackPayload.round1?.tightened_30_second_structure;
             if (thirtySecond) {
@@ -922,10 +973,21 @@ class App {
             }
 
             if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
                 detailsHtml += `
                     <div class="criterion-detail">
                         <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
-                        ${this.renderStringList(value, 'None')}
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+                return;
+            }
+
+            if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
                     </div>
                 `;
                 return;
@@ -935,7 +997,7 @@ class App {
                 detailsHtml += `
                     <div class="criterion-detail">
                         <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
-                        <pre class="metric-json">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>
+                        ${this.renderMetricSummary(value)}
                     </div>
                 `;
             }
@@ -970,6 +1032,40 @@ class App {
                 ${items.map(item => `<li>${this.escapeHtml(String(item || ''))}</li>`).join('')}
             </ul>
         `;
+    }
+
+    renderObjectList(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            return '<p class="summary-muted">None</p>';
+        }
+
+        return items.map(item => {
+            if (!item || typeof item !== 'object') {
+                return `<p>${this.escapeHtml(String(item || ''))}</p>`;
+            }
+
+            const rows = Object.entries(item).map(([k, v]) => {
+                const label = this.humanizeKey(k);
+                const val = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+                return `<div class="obj-row"><span class="obj-key">${this.escapeHtml(label)}:</span> <span class="obj-val">${this.escapeHtml(val)}</span></div>`;
+            }).join('');
+
+            return `<div class="obj-item">${rows}</div>`;
+        }).join('');
+    }
+
+    renderMetricSummary(obj) {
+        if (!obj || typeof obj !== 'object') {
+            return '<p class="summary-muted">No data</p>';
+        }
+
+        const rows = Object.entries(obj).map(([k, v]) => {
+            const label = this.humanizeKey(k);
+            const val = typeof v === 'number' ? v.toFixed(1) : String(v ?? '');
+            return `<div class="metric-row"><span class="metric-label">${this.escapeHtml(label)}</span><span class="metric-value">${this.escapeHtml(val)}</span></div>`;
+        }).join('');
+
+        return `<div class="metric-summary">${rows}</div>`;
     }
 
     setupTabs() {
@@ -1189,7 +1285,9 @@ class App {
         if (!job || typeof job !== 'object') {
             return false;
         }
-        const key = roundNumber === 1 ? 'feedback_round_1' : 'feedback_round_2';
+        const keyMap = { 1: 'feedback_round_1', 2: 'feedback_round_2', 3: 'feedback_round_3' };
+        const key = keyMap[roundNumber];
+        if (!key) return false;
         const payload = job[key];
         return !!(payload && typeof payload === 'object');
     }
@@ -1201,15 +1299,16 @@ class App {
 
         const round1 = this.hasRoundFeedback(job, 1) ? job.feedback_round_1 : null;
         const round2 = this.hasRoundFeedback(job, 2) ? job.feedback_round_2 : null;
-        if (round1 || round2) {
-            return { round1, round2, legacy: null };
+        const round3 = this.hasRoundFeedback(job, 3) ? job.feedback_round_3 : null;
+        if (round1 || round2 || round3) {
+            return { round1, round2, round3, legacy: null };
         }
 
         const legacy = job.feedback || job.summary;
         if (!legacy || typeof legacy !== 'object') {
-            return { round1: null, round2: null, legacy: null };
+            return { round1: null, round2: null, round3: null, legacy: null };
         }
-        return { round1: null, round2: null, legacy };
+        return { round1: null, round2: null, round3: null, legacy };
     }
 
     progressLabel(progress) {

@@ -9,3 +9,6 @@ pypdf
 python-pptx
 openai>=1.0.0
 httpx
+librosa>=0.10
+numpy
+soundfile
