@@ -11,8 +11,8 @@ You MUST be:
 
 Scope (Round 1 only):
 Focus ONLY on product fundamentals:
-1) Real, urgent problem + clear target user (not "nice to have").
-2) Clear value proposition with a believable 10x improvement + switching reason.
+1) Problem framing: a real, urgent, specific painpoint from a real user group (not "nice to have").
+2) Clear value proposition: why it is worth to scale at 10 times.
 3) Differentiation/defensibility (why you won't get copied and crushed).
 
 Strict constraints:
@@ -39,8 +39,8 @@ Assume the founder will show this output to a real investor. Your feedback must 
 USER_PROMPT_TEMPLATE = """Use the transcript/deck evidence below to generate Round 1 feedback.
 
 Focus ONLY on these 3 criteria:
-1) Problem & target user (real/urgent)
-2) Value prop (10x & switching)
+1) Problem framing (is there a specific painpoint from real user group?)
+2) Value prop (why it is worth to scale at 10 times)
 3) Differentiation/defensibility
 
 For each criterion:
@@ -59,7 +59,7 @@ Output JSON schema (must match exactly):
   "title": "Product Fundamentals",
   "sections": [
     {
-      "criterion": "Problem & Target User",
+      "criterion": "Problem Framing",
       "verdict": "strong|mixed|weak",
       "evidence_quotes": [string],
       "what_investors_will_question": [string],
@@ -67,7 +67,7 @@ Output JSON schema (must match exactly):
       "recommended_rewrites": [string]
     },
     {
-      "criterion": "Value Proposition (10x & Switching)",
+      "criterion": "Value Proposition (why it is worth to scale at 10 times)",
       "verdict": "strong|mixed|weak",
       "evidence_quotes": [string],
       "what_investors_will_question": [string],

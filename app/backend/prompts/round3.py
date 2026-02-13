@@ -23,6 +23,7 @@ Rules:
 - Pick 2-3 well-delivered moments and 2-4 misaligned moments with specific fixes.
 - Use the actual dB values and Hz values in your analysis — be quantitative.
 - Reference the exact text and time range for each moment.
+- CRITICAL: For every moment (well-delivered or misaligned), the most important part is the WHY — explain the underlying logic and rationale. For well-delivered moments: WHY does this vocal delivery work here? What is the content saying, and why does this energy/pitch level reinforce the message? For misaligned moments: WHY is this a problem? What is the content importance at this point, what should the energy feel like, and why does the current delivery undermine the message? The rationale must connect content meaning → expected vocal delivery → actual vocal delivery → impact on the listener.
 
 ## Section 2: Pacing & Emphasis
 Analyze the per-sentence pacing data to find sentences where speaking speed doesn't match importance.
@@ -49,9 +50,10 @@ Product type → Expected tone:
 - Hardware / Deep tech → Patient, explanatory, technically confident, lower pitch
 
 Rules:
-- State what product type you inferred and why.
-- Assess alignment between actual vocal delivery and the expected tone profile.
-- Give 2-3 specific adjustments to better match the expected tone.
+- State what product type you inferred and explain WHY — what signals in the transcript/deck led you to this classification.
+- Explain the RATIONALE for why this product category demands this specific tone: what do investors in this space expect to hear, what does the tone signal about the founder's understanding of their market, and why does a mismatch erode credibility.
+- Assess alignment: describe WHAT the speaker's actual vocal style is (using dB/Hz/WPM evidence), then explain WHY it does or does not match the expected profile. Don't just say "your tone doesn't match" — explain the logic of why investors hearing this tone for this product type would be concerned.
+- Give 2-3 specific adjustments and for each one explain WHY the adjustment matters — what impression it creates, what investor concern it addresses, and how it changes the perceived credibility.
 - Reference actual moments from the timeline or pacing data as evidence.
 
 Strict constraints:
@@ -90,14 +92,14 @@ Output JSON schema (must match exactly):
         {
           "time_range": "M:SS–M:SS",
           "text": "exact transcript text",
-          "why": "explanation with dB/Hz references"
+          "why": "The rationale: what the content means at this point, why this energy/pitch level is the right match, and how it reinforces the message for the listener. Include dB/Hz references."
         }
       ],
       "misaligned_moments": [
         {
           "time_range": "M:SS–M:SS",
           "text": "exact transcript text",
-          "issue": "what's wrong with dB/Hz references",
+          "why": "The rationale: what the content importance is here, what the energy/pitch should feel like and why, and why the current delivery undermines the message. Include dB/Hz references.",
           "fix": "concrete delivery instruction"
         }
       ]
@@ -133,9 +135,13 @@ Output JSON schema (must match exactly):
       "criterion": "Tone-Product Alignment",
       "verdict": "strong|mixed|weak",
       "inferred_product_type": "string",
+      "why_this_tone": "Explain the logic: why does this product category demand this specific tone? What do investors expect, and what does a mismatch signal?",
+      "your_actual_tone": "Describe the speaker's actual vocal style with dB/Hz/WPM evidence.",
       "alignment_assessment": [string],
       "target_tone_profile": [string],
-      "recommended_adjustments": [string]
+      "recommended_adjustments": [
+        "Each adjustment must explain WHY it matters — what impression it creates, what investor concern it addresses, and how it changes perceived credibility."
+      ]
     }
   ],
   "top_3_vocal_actions": [string]

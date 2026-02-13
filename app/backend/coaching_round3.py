@@ -77,6 +77,10 @@ def _validate_round3_schema(payload: dict) -> dict:
         elif criterion == "Tone-Product Alignment":
             if not isinstance(section.get("inferred_product_type"), str):
                 raise RuntimeError('"inferred_product_type" must be a string.')
+            if not isinstance(section.get("why_this_tone"), str):
+                raise RuntimeError('"why_this_tone" must be a string.')
+            if not isinstance(section.get("your_actual_tone"), str):
+                raise RuntimeError('"your_actual_tone" must be a string.')
             if not isinstance(section.get("alignment_assessment"), list):
                 raise RuntimeError('"alignment_assessment" must be an array.')
             if not isinstance(section.get("target_tone_profile"), list):

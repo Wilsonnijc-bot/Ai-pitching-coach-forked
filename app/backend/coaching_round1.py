@@ -18,8 +18,8 @@ DEFAULT_MODEL = "gpt-5.1-chat"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_ERROR_CHARS = 1200
 EXPECTED_CRITERIA = {
-    "Problem & Target User",
-    "Value Proposition (10x & Switching)",
+    "Problem Framing",
+    "Value Proposition (why it is worth to scale at 10 times)",
     "Differentiation & Defensibility",
 }
 
