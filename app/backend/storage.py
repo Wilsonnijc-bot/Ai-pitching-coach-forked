@@ -71,6 +71,7 @@ class JobStore(Protocol):
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
+        video_gcs_uri: object = UNSET,
         error: object = UNSET,
     ) -> None:
         pass
@@ -132,6 +133,7 @@ class InMemoryJobStore:
                 artifacts_gcs_prefix=None,
                 has_diarization=None,
                 artifacts_error=None,
+                video_gcs_uri=None,
                 error=None,
             )
 
@@ -164,6 +166,7 @@ class InMemoryJobStore:
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
+        video_gcs_uri: object = UNSET,
         error: object = UNSET,
     ) -> None:
         with self._lock:
@@ -210,6 +213,8 @@ class InMemoryJobStore:
                 job.has_diarization = has_diarization
             if artifacts_error is not UNSET:
                 job.artifacts_error = artifacts_error
+            if video_gcs_uri is not UNSET:
+                job.video_gcs_uri = video_gcs_uri
             if error is not UNSET:
                 job.error = error
             job.updated_at = utc_now()
@@ -291,6 +296,7 @@ class PostgresJobStore:
                         artifacts_gcs_prefix TEXT NULL,
                         has_diarization BOOLEAN NULL,
                         artifacts_error TEXT NULL,
+                        video_gcs_uri TEXT NULL,
                         error TEXT NULL
                     )
                     """
@@ -463,6 +469,12 @@ class PostgresJobStore:
                 )
                 cur.execute(
                     """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS video_gcs_uri TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS deck_assets (
                         job_id UUID PRIMARY KEY
                             REFERENCES transcription_jobs(job_id)
@@ -507,9 +519,10 @@ class PostgresJobStore:
                         artifacts_gcs_prefix,
                         has_diarization,
                         artifacts_error,
+                        video_gcs_uri,
                         error
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         job_id,
@@ -530,6 +543,7 @@ class PostgresJobStore:
                         None,
                         "r2_v1",
                         "pending",
+                        None,
                         None,
                         None,
                         None,
@@ -567,6 +581,7 @@ class PostgresJobStore:
                         tj.artifacts_gcs_prefix,
                         tj.has_diarization,
                         tj.artifacts_error,
+                        tj.video_gcs_uri,
                         tj.error,
                         da.filename,
                         da.content_type,
@@ -607,6 +622,7 @@ class PostgresJobStore:
                     artifacts_gcs_prefix,
                     has_diarization,
                     artifacts_error,
+                    video_gcs_uri,
                     error,
                     deck_filename,
                     deck_content_type,
@@ -665,6 +681,7 @@ class PostgresJobStore:
                     artifacts_gcs_prefix=artifacts_gcs_prefix,
                     has_diarization=has_diarization,
                     artifacts_error=artifacts_error,
+                    video_gcs_uri=video_gcs_uri,
                     error=error,
                 )
 
@@ -693,6 +710,7 @@ class PostgresJobStore:
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
+        video_gcs_uri: object = UNSET,
         error: object = UNSET,
     ) -> None:
         assignments: List[str] = []
@@ -761,6 +779,9 @@ class PostgresJobStore:
         if artifacts_error is not UNSET:
             assignments.append("artifacts_error = %s")
             values.append(artifacts_error)
+        if video_gcs_uri is not UNSET:
+            assignments.append("video_gcs_uri = %s")
+            values.append(video_gcs_uri)
         if error is not UNSET:
             assignments.append("error = %s")
             values.append(error)

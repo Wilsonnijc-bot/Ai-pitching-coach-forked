@@ -1,9 +1,9 @@
-// Audio recording functionality using MediaRecorder API
+// Video recording functionality using MediaRecorder API
 
-export class AudioRecorder {
+export class VideoRecorder {
     constructor() {
         this.mediaRecorder = null;
-        this.audioChunks = [];
+        this.videoChunks = [];
         this.stream = null;
         this.startTime = null;
         this.timerInterval = null;
@@ -12,25 +12,30 @@ export class AudioRecorder {
     }
 
     /**
-     * Request microphone permission and initialize MediaRecorder
+     * Request camera & microphone permission and initialize MediaRecorder
      * @returns {Promise<boolean>} Success status
      */
     async initialize() {
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ 
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    facingMode: 'user',
+                },
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: 44100
-                } 
+                    sampleRate: 44100,
+                },
             });
 
             // Try preferred mimeType, fallback to supported types
             const mimeTypes = [
-                'audio/webm;codecs=opus',
-                'audio/webm',
-                'audio/ogg;codecs=opus',
-                'audio/mp4'
+                'video/webm;codecs=vp9,opus',
+                'video/webm;codecs=vp8,opus',
+                'video/webm',
+                'video/mp4',
             ];
 
             let selectedMimeType = '';
@@ -42,28 +47,38 @@ export class AudioRecorder {
             }
 
             if (!selectedMimeType) {
-                throw new Error('No supported audio MIME type found');
+                throw new Error('No supported video MIME type found');
             }
 
             this.mediaRecorder = new MediaRecorder(this.stream, {
-                mimeType: selectedMimeType
+                mimeType: selectedMimeType,
+                videoBitsPerSecond: 1_000_000, // ~1 Mbps → ≈40 MB for 5 min
             });
 
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0) {
-                    this.audioChunks.push(event.data);
+                    this.videoChunks.push(event.data);
                 }
             };
 
             return true;
         } catch (error) {
-            console.error('Microphone initialization error:', error);
+            console.error('Camera & microphone initialization error:', error);
             throw error;
         }
     }
 
     /**
-     * Start recording audio
+     * Return the underlying MediaStream so callers can attach it
+     * to a <video> element for live preview.
+     * @returns {MediaStream|null}
+     */
+    getStream() {
+        return this.stream;
+    }
+
+    /**
+     * Start recording video
      * @param {Function} onTimerUpdate - Callback for timer updates (seconds)
      * @param {Function} onMaxDuration - Callback when max duration reached
      */
@@ -75,7 +90,7 @@ export class AudioRecorder {
             throw new Error('Recorder is already recording');
         }
 
-        this.audioChunks = [];
+        this.videoChunks = [];
         this.startTime = Date.now();
         this.maxDurationTriggered = false;
         this.mediaRecorder.start(250); // Collect data frequently for responsive stop/upload
@@ -104,8 +119,8 @@ export class AudioRecorder {
     }
 
     /**
-     * Stop recording and return audio blob
-     * @returns {Promise<Blob>} Recorded audio blob
+     * Stop recording and return video blob
+     * @returns {Promise<Blob>} Recorded video blob
      */
     stopRecording() {
         return new Promise((resolve, reject) => {
@@ -117,10 +132,10 @@ export class AudioRecorder {
             clearInterval(this.timerInterval);
 
             this.mediaRecorder.onstop = () => {
-                const audioBlob = new Blob(this.audioChunks, { 
+                const videoBlob = new Blob(this.videoChunks, { 
                     type: this.mediaRecorder.mimeType 
                 });
-                resolve(audioBlob);
+                resolve(videoBlob);
             };
 
             this.mediaRecorder.stop();
@@ -139,7 +154,7 @@ export class AudioRecorder {
     }
 
     /**
-     * Clean up resources
+     * Clean up resources (stops camera & mic tracks)
      */
     cleanup() {
         if (this.timerInterval) {
@@ -151,7 +166,7 @@ export class AudioRecorder {
         }
 
         this.mediaRecorder = null;
-        this.audioChunks = [];
+        this.videoChunks = [];
         this.stream = null;
         this.startTime = null;
         this.maxDurationTriggered = false;

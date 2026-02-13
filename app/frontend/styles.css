@@ -414,6 +414,18 @@ body {
     height: 150px;
     margin-bottom: 32px;
     object-fit: contain;
+    display: none;
+}
+
+#camera-preview {
+    width: 100%;
+    max-width: 400px;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+    background: #1a1a2e;
+    object-fit: cover;
+    transform: scaleX(-1);
+    margin-bottom: 24px;
 }
 
 .record-button {

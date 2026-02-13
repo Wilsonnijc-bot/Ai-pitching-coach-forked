@@ -149,22 +149,22 @@ def health() -> dict:
 @app.post("/api/jobs", response_model=CreateJobResponse)
 async def create_transcription_job(
     background_tasks: BackgroundTasks,
-    audio: Optional[UploadFile] = File(None),
+    video: Optional[UploadFile] = File(None),
     deck: Optional[UploadFile] = File(None),
 ) -> CreateJobResponse:
-    if audio is None:
-        raise HTTPException(status_code=400, detail="Missing audio file.")
+    if video is None:
+        raise HTTPException(status_code=400, detail="Missing video file.")
 
     job_id = str(uuid.uuid4())
     job_store.create_job(job_id)
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
-    suffix = Path(audio.filename or "").suffix or ".webm"
+    suffix = Path(video.filename or "").suffix or ".webm"
     input_path = temp_dir / f"input{suffix}"
     deck_upload = None
 
     try:
-        await write_upload_to_disk(audio, input_path, field_name="audio", max_size_bytes=MAX_UPLOAD_BYTES)
+        await write_upload_to_disk(video, input_path, field_name="video", max_size_bytes=MAX_UPLOAD_BYTES)
         if deck is not None:
             deck_upload = await _save_deck_upload(job_id, deck)
     except Exception:
@@ -225,6 +225,7 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         feedback_round_2_version=job.feedback_round_2_version,
         feedback_round_2_error=job.feedback_round_2_error,
         result=job.result,
+        video_gcs_uri=job.video_gcs_uri,
         error=job.error,
     )
 

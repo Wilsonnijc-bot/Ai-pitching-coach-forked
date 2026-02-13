@@ -91,6 +91,49 @@ def upload_file(bucket: str, blob_path: str, local_path: Path, content_type: str
     return build_gs_uri(bucket, clean_path)
 
 
+def upload_file_resumable(
+    bucket: str,
+    blob_path: str,
+    local_path: Path,
+    content_type: str,
+    chunk_size: int = 8 * 1024 * 1024,  # 8 MB chunks
+    max_retries: int = 3,
+) -> str:
+    """Upload a file using resumable uploads — reliable for large files (video).
+
+    GCS resumable uploads can recover from transient network failures
+    without re-uploading the entire file.
+    """
+    if not local_path.exists():
+        raise FileNotFoundError(f"Local file does not exist: {local_path}")
+    client = get_storage_client()
+    clean_path = normalize_blob_path(blob_path)
+    blob = client.bucket(bucket).blob(clean_path, chunk_size=chunk_size)
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            blob.upload_from_filename(
+                str(local_path),
+                content_type=content_type,
+                timeout=300,  # 5-minute timeout per chunk
+            )
+            return build_gs_uri(bucket, clean_path)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Resumable upload attempt %d/%d failed for gs://%s/%s: %s",
+                attempt + 1,
+                max_retries,
+                bucket,
+                clean_path,
+                exc,
+            )
+            if attempt + 1 >= max_retries:
+                break
+    raise last_error or RuntimeError(f"Upload failed after {max_retries} attempts")
+
+
 def download_text(bucket: str, blob_path: str) -> str:
     client = get_storage_client()
     clean_path = normalize_blob_path(blob_path)

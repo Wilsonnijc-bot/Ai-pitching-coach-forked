@@ -16,6 +16,7 @@ from .gcs_utils import (
     delete_prefix,
     get_default_bucket,
     upload_file,
+    upload_file_resumable,
     upload_json,
     upload_text,
 )
@@ -252,10 +253,25 @@ def process_transcription_job(
         else:
             job_store.update_job(job_id, status="transcribing", progress=10, error=None)
 
+        # --- Upload original video to GCS for replay ---
+        bucket_name = get_default_bucket()
+        video_blob_path = f"jobs/{job_id}/video{input_path.suffix}"
+        try:
+            gcs_video_uri = upload_file_resumable(
+                bucket_name,
+                video_blob_path,
+                input_path,
+                content_type="video/webm",
+            )
+            job_store.update_job(job_id, video_gcs_uri=gcs_video_uri)
+            logger.info("job_id=%s uploaded_video_to_gcs uri=%s", job_id, gcs_video_uri)
+        except Exception:
+            logger.warning("job_id=%s video_upload_failed", job_id, exc_info=True)
+
+        # --- Extract audio from video and upload WAV for STT ---
         wav_path = temp_dir / "audio.wav"
         convert_audio_to_wav_16khz_mono(input_path, wav_path)
 
-        bucket_name = get_default_bucket()
         job_store.update_job(job_id, status="uploading_audio_to_gcs", progress=20, error=None)
         gcs_audio_uri = upload_file(
             bucket_name,

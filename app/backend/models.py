@@ -43,6 +43,7 @@ class JobRecord:
     artifacts_gcs_prefix: Optional[str] = None
     has_diarization: Optional[bool] = None
     artifacts_error: Optional[str] = None
+    video_gcs_uri: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -119,4 +120,5 @@ class JobStatusResponse(BaseModel):
     feedback_round_2_error: Optional[str] = None
     # Backward-compatible alias for older frontend clients.
     result: Optional[TranscriptResult] = None
+    video_gcs_uri: Optional[str] = None
     error: Optional[str]

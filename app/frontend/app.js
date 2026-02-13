@@ -1,6 +1,6 @@
 // Main application logic and routing
 
-import { AudioRecorder, formatTime } from './recorder.js';
+import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
 import { createJob, getJob, startRound1Feedback, startRound2Feedback } from './api.js';
 
@@ -15,7 +15,7 @@ const STAGES = new Set(['idle', 'recording', 'uploading', 'transcribing', 'feedb
 class App {
     constructor() {
         this.currentRoute = 'home';
-        this.audioRecorder = null;
+        this.videoRecorder = null;
         this.deckUploader = null;
         this.transcriptionData = null;
         this.currentJobId = null;
@@ -167,8 +167,7 @@ class App {
                         <h2 class="card-title">Record your pitch</h2>
 
                         <div class="recording-area">
-                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/630938a7-3ec3-4e35-a03a-123708d88ef1.png"
-                                 alt="Recording" class="recording-visual">
+                            <video id="camera-preview" autoplay muted playsinline></video>
 
                             <button class="record-button" id="record-btn">
                                 <div class="record-icon"></div>
@@ -298,11 +297,17 @@ class App {
         try {
             this.clearStatusActions();
             this.setStage('recording');
-            this.setRecordingStatus('Requesting microphone permission...', 'info', true);
+            this.setRecordingStatus('Requesting camera & microphone permission...', 'info', true);
 
-            if (!this.audioRecorder) {
-                this.audioRecorder = new AudioRecorder();
-                await this.audioRecorder.initialize();
+            if (!this.videoRecorder) {
+                this.videoRecorder = new VideoRecorder();
+                await this.videoRecorder.initialize();
+            }
+
+            // Attach live camera stream to the preview element
+            const preview = document.getElementById('camera-preview');
+            if (preview && this.videoRecorder.getStream()) {
+                preview.srcObject = this.videoRecorder.getStream();
             }
 
             this.isRecording = true;
@@ -310,7 +315,7 @@ class App {
             this.setRecordButtonState('recording', false);
             timer.textContent = '00:00';
 
-            this.audioRecorder.startRecording(
+            this.videoRecorder.startRecording(
                 (seconds) => {
                     timer.textContent = formatTime(Math.min(seconds, MAX_RECORD_SECONDS));
                 },
@@ -331,7 +336,7 @@ class App {
             this.setStage('error');
             this.setRecordButtonState('idle', false);
             this.setRecordingStatus(
-                'Microphone access denied. Please allow microphone access in your browser settings and try again.',
+                'Camera/microphone access denied. Please allow camera & microphone access in your browser settings and try again.',
                 'error',
                 false
             );
@@ -350,8 +355,12 @@ class App {
         this.setRecordingStatus('Stopping recording...', 'info', true);
 
         try {
-            const audioBlob = await this.audioRecorder.stopRecording();
-            const elapsedSeconds = this.audioRecorder.getElapsedSeconds();
+            const videoBlob = await this.videoRecorder.stopRecording();
+            const elapsedSeconds = this.videoRecorder.getElapsedSeconds();
+
+            // Detach camera preview after stopping
+            const preview = document.getElementById('camera-preview');
+            if (preview) { preview.srcObject = null; }
 
             this.isRecording = false;
             this.isStopping = false;
@@ -364,8 +373,8 @@ class App {
                 return;
             }
 
-            if (!audioBlob || audioBlob.size === 0) {
-                this.setRecordingStatus('Recording failed. Captured audio is empty.', 'error', false);
+            if (!videoBlob || videoBlob.size === 0) {
+                this.setRecordingStatus('Recording failed. Captured video is empty.', 'error', false);
                 return;
             }
 
@@ -373,7 +382,7 @@ class App {
                 this.setRecordingStatus('Reached 5:00 limit. Uploading recording...', 'info', true);
             }
 
-            await this.handleTranscription(audioBlob);
+            await this.handleTranscription(videoBlob);
         } catch (error) {
             console.error('Stop recording error:', error);
             this.isRecording = false;
@@ -384,7 +393,7 @@ class App {
         }
     }
 
-    async handleTranscription(audioBlob) {
+    async handleTranscription(videoBlob) {
         const selectedDeck = this.deckUploader ? this.deckUploader.currentFile : null;
 
         try {
@@ -399,12 +408,12 @@ class App {
             this.round2RequestedForJobId = null;
 
             this.setRecordingStatus(
-                selectedDeck ? 'Uploading audio + deck...' : 'Uploading audio...',
+                selectedDeck ? 'Uploading video + deck...' : 'Uploading video...',
                 'info',
                 true
             );
 
-            const created = await createJob(audioBlob, selectedDeck);
+            const created = await createJob(videoBlob, selectedDeck);
             if (!created.job_id) {
                 throw new Error('Backend did not return a job_id.');
             }

@@ -27,32 +27,64 @@ async function readErrorDetail(response, fallbackMessage) {
 }
 
 /**
- * Create a transcription job by uploading audio (and optional deck).
- * @param {Blob} audioBlob
+ * Create a transcription job by uploading video (and optional deck).
+ * Includes automatic retry with exponential backoff for upload reliability.
+ * @param {Blob} videoBlob
  * @param {File|null} deckFile
  * @returns {Promise<{job_id:string,status:string}>}
  */
-export async function createJob(audioBlob, deckFile = null) {
+export async function createJob(videoBlob, deckFile = null) {
     const formData = new FormData();
-    formData.append('audio', audioBlob, 'recording.webm');
+    formData.append('video', videoBlob, 'recording.webm');
     if (deckFile) {
         formData.append('deck', deckFile, deckFile.name || 'deck');
     }
 
-    const response = await fetch(`${API_BASE_URL}/api/jobs`, {
-        method: 'POST',
-        body: formData,
-    });
+    const MAX_RETRIES = 3;
+    let lastError = null;
 
-    if (!response.ok) {
-        const detail = await readErrorDetail(
-            response,
-            `Job creation failed (${response.status})`
-        );
-        throw new Error(detail);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const controller = new AbortController();
+            // 3-minute timeout for large video uploads
+            const timeoutId = setTimeout(() => controller.abort(), 3 * 60 * 1000);
+
+            const response = await fetch(`${API_BASE_URL}/api/jobs`, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const detail = await readErrorDetail(
+                    response,
+                    `Job creation failed (${response.status})`
+                );
+                // Don't retry on 4xx client errors (bad request, too large, etc.)
+                if (response.status >= 400 && response.status < 500) {
+                    throw new Error(detail);
+                }
+                lastError = new Error(detail);
+            } else {
+                return response.json();
+            }
+        } catch (err) {
+            lastError = err;
+            // Don't retry if it was a deliberate abort or a 4xx error
+            if (err.name === 'AbortError') {
+                throw new Error('Upload timed out. Please check your connection and try again.');
+            }
+            if (attempt < MAX_RETRIES - 1 && !err.message.includes('(4')) {
+                // Exponential backoff: 1s, 2s
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                continue;
+            }
+        }
     }
 
-    return response.json();
+    throw lastError || new Error('Upload failed after retries.');
 }
 
 /**
