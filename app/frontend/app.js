@@ -782,21 +782,55 @@ class App {
         }
 
         if (feedbackPayload.round1 || feedbackPayload.round2) {
-            const round1Html = feedbackPayload.round1
-                ? this.renderRoundFeedbackSection(feedbackPayload.round1, 'Round 1')
-                : '<p class="summary-muted">Round 1 feedback is not available yet.</p>';
-            const round2Html = feedbackPayload.round2
-                ? this.renderRoundFeedbackSection(feedbackPayload.round2, 'Round 2')
-                : '<p class="summary-muted">Round 2 feedback is not available yet.</p>';
+            const allSections = [];
+            if (feedbackPayload.round1 && Array.isArray(feedbackPayload.round1.sections)) {
+                allSections.push(...feedbackPayload.round1.sections);
+            }
+            if (feedbackPayload.round2 && Array.isArray(feedbackPayload.round2.sections)) {
+                allSections.push(...feedbackPayload.round2.sections);
+            }
+
+            const sectionCards = allSections
+                .map(section => this.renderSectionCard(section))
+                .join('');
+
+            let statusHtml = '';
+            if (!feedbackPayload.round1) {
+                statusHtml += '<p class="summary-muted">Round 1 feedback is not available yet.</p>';
+            }
+            if (!feedbackPayload.round2) {
+                statusHtml += '<p class="summary-muted">Round 2 feedback is not available yet.</p>';
+            }
+
+            const actionBlocks = [];
+            const thirtySecond = feedbackPayload.round2?.tightened_30_second_structure
+                || feedbackPayload.round1?.tightened_30_second_structure;
+            if (thirtySecond) {
+                actionBlocks.push(`
+                    <div class="feedback-action-card">
+                        <h4 class="subsection-label">Tightened 30-Second Structure</h4>
+                        ${this.renderStringList(thirtySecond, 'No structure provided')}
+                    </div>
+                `);
+            }
+
+            const actions1 = feedbackPayload.round1?.top_3_actions_for_next_pitch || [];
+            const actions2 = feedbackPayload.round2?.top_3_actions_for_next_pitch || [];
+            const allActions = [...actions1, ...actions2];
+            if (allActions.length > 0) {
+                actionBlocks.push(`
+                    <div class="feedback-action-card">
+                        <h4 class="subsection-label">Top Actions For Next Pitch</h4>
+                        ${this.renderStringList(allActions, 'No actions provided')}
+                    </div>
+                `);
+            }
 
             summaryCard.innerHTML = `
-                <div class="feedback-rounds">
-                    <section class="feedback-round">
-                        ${round1Html}
-                    </section>
-                    <section class="feedback-round">
-                        ${round2Html}
-                    </section>
+                <div class="feedback-sections">
+                    ${sectionCards || '<p class="summary-muted">No sections available</p>'}
+                    ${statusHtml}
+                    ${actionBlocks.join('')}
                 </div>
                 <details class="raw-json">
                     <summary>View raw JSON</summary>
@@ -871,39 +905,15 @@ class App {
         `;
     }
 
-    renderRoundFeedbackSection(roundPayload, fallbackTitle) {
-        const title = this.escapeHtml(roundPayload.title || fallbackTitle);
-        const sections = Array.isArray(roundPayload.sections) ? roundPayload.sections : [];
-        const sectionsHtml = sections
-            .map(section => this.renderRoundCriterionBlock(section))
-            .join('');
-
-        const topActions = this.renderStringList(roundPayload.top_3_actions_for_next_pitch, 'No actions provided');
-        const thirtySecond = this.renderStringList(roundPayload.tightened_30_second_structure, 'No structure provided');
-
-        return `
-            <h4 class="summary-main-title">${title}</h4>
-            <div class="summary-grid">
-                ${sectionsHtml || '<div class="summary-block full-width"><p class="summary-muted">No sections available</p></div>'}
-                <div class="summary-block full-width">
-                    <h5>Tightened 30-Second Structure</h5>
-                    ${thirtySecond}
-                </div>
-                <div class="summary-block full-width">
-                    <h5>Top 3 Actions For Next Pitch</h5>
-                    ${topActions}
-                </div>
-            </div>
-        `;
-    }
-
-    renderRoundCriterionBlock(section) {
+    renderSectionCard(section) {
         if (!section || typeof section !== 'object') {
             return '';
         }
 
         const criterion = this.escapeHtml(section.criterion || 'Criterion');
-        const verdict = this.escapeHtml(String(section.verdict || 'mixed').toUpperCase());
+        const verdictRaw = String(section.verdict || 'mixed').toLowerCase();
+        const verdictLabel = verdictRaw.toUpperCase();
+        const verdictClass = ['weak', 'strong'].includes(verdictRaw) ? verdictRaw : 'mixed';
         let detailsHtml = '';
 
         Object.entries(section).forEach(([key, value]) => {
@@ -914,7 +924,7 @@ class App {
             if (Array.isArray(value)) {
                 detailsHtml += `
                     <div class="criterion-detail">
-                        <h5>${this.escapeHtml(this.humanizeKey(key))}</h5>
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
                         ${this.renderStringList(value, 'None')}
                     </div>
                 `;
@@ -924,7 +934,7 @@ class App {
             if (value && typeof value === 'object') {
                 detailsHtml += `
                     <div class="criterion-detail">
-                        <h5>${this.escapeHtml(this.humanizeKey(key))}</h5>
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
                         <pre class="metric-json">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>
                     </div>
                 `;
@@ -932,9 +942,14 @@ class App {
         });
 
         return `
-            <div class="summary-block full-width">
-                <h5>${criterion} <span class="confidence-pill medium">${verdict}</span></h5>
-                ${detailsHtml}
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
             </div>
         `;
     }
