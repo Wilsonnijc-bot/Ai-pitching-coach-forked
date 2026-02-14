@@ -1,0 +1,15 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+test-results/
+scripts/
+*.md
+.slugignore
+Aptfile
+Procfile
+bin/post_compile
+.python-version
+.env
+.env.*
+node_modules
