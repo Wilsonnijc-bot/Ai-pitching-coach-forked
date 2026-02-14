@@ -140,31 +140,33 @@ class App {
                     <h1 class="studio-title">Studio</h1>
                 </div>
 
-                <div class="studio-grid" id="input-blocks">
-                    <div class="card" id="deck-upload-card">
-                        <h2 class="card-title">Upload your pitch deck</h2>
-
+                <div class="studio-stack" id="input-blocks">
+                    <!-- Step 1: Slim deck upload bar -->
+                    <div class="deck-upload-bar" id="deck-upload-card">
                         <div class="upload-area">
-                            <img src="https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/e9275271-5cc3-4538-9599-50f4e1bc9b2f.png"
-                                 alt="Upload" class="upload-illustration">
-                            <p class="upload-text">Drag and drop your deck here, or click to browse</p>
-                            <p class="upload-hint">Supports .pdf, .pptx (max 25MB)</p>
+                            <span class="upload-bar-label">Upload your pitch deck</span>
+                            <span class="upload-bar-cta">Drag &amp; drop here or click to browse</span>
+                            <span class="upload-bar-hint">.pdf / .pptx, max 25 MB</span>
                             <input type="file" class="file-input" accept=".pdf,.pptx">
                         </div>
 
                         <div class="file-info">
-                            <p class="file-name"></p>
-                            <p class="file-size"></p>
+                            <span class="file-info-inline">
+                                <span class="deck-check">&#10003;</span>
+                                <span class="file-name"></span>
+                                <span class="file-size"></span>
+                            </span>
                             <div class="file-actions">
-                                <button class="btn btn-secondary btn-remove">Remove</button>
-                                <button class="btn btn-primary btn-upload">Upload</button>
+                                <button class="btn btn-secondary btn-small btn-remove">Remove</button>
+                                <button class="btn btn-primary btn-small btn-upload">Ready</button>
                             </div>
                         </div>
 
                         <div class="status-message"></div>
                     </div>
 
-                    <div class="card" id="recording-card">
+                    <!-- Step 2: Primary recording area -->
+                    <div class="card recording-primary" id="recording-card">
                         <h2 class="card-title">Record your pitch</h2>
 
                         <div class="recording-area">
@@ -198,7 +200,7 @@ class App {
                         <div class="status-message" id="recording-status"></div>
                         <div class="status-actions" id="status-actions"></div>
                     </div>
-                </div>
+                </div>  <!-- /studio-stack -->
 
                 <div class="card results-panel" id="results-panel">
                     <div class="results-header">
@@ -323,7 +325,7 @@ class App {
             recordBtn.disabled = true;
             recordBtn.classList.add('no-deck');
             recordText.textContent = 'Upload deck first';
-            this.setRecordingStatus('Upload your pitch deck on the left before recording.', 'info', false);
+            this.setRecordingStatus('Upload your pitch deck above before recording.', 'info', false);
         }
     }
 
@@ -1060,8 +1062,8 @@ class App {
             const bodyActions = feedbackPayload.round4?.top_3_body_language_actions || [];
             if (bodyActions.length > 0) {
                 actionBlocks.push(`
-                    <div class="feedback-action-card">
-                        <h4 class="subsection-label">Top Body Language Actions</h4>
+                    <div class="feedback-action-card action-card-neutral">
+                        <h4 class="subsection-label semantic-label-neutral">Top Body Language Actions</h4>
                         ${this.renderStringList(bodyActions, 'No body language actions provided')}
                     </div>
                 `);
@@ -1070,8 +1072,8 @@ class App {
             const vocalActions = feedbackPayload.round3?.top_3_vocal_actions || [];
             if (vocalActions.length > 0) {
                 actionBlocks.push(`
-                    <div class="feedback-action-card">
-                        <h4 class="subsection-label">Top Vocal Actions</h4>
+                    <div class="feedback-action-card action-card-neutral">
+                        <h4 class="subsection-label semantic-label-neutral">Top Vocal Actions</h4>
                         ${this.renderStringList(vocalActions, 'No vocal actions provided')}
                     </div>
                 `);
@@ -1081,8 +1083,8 @@ class App {
                 || feedbackPayload.round1?.tightened_30_second_structure;
             if (thirtySecond) {
                 actionBlocks.push(`
-                    <div class="feedback-action-card">
-                        <h4 class="subsection-label">Tightened 30-Second Structure</h4>
+                    <div class="feedback-action-card action-card-neutral">
+                        <h4 class="subsection-label semantic-label-neutral">Tightened 30-Second Structure</h4>
                         ${this.renderStringList(thirtySecond, 'No structure provided')}
                     </div>
                 `);
@@ -1093,9 +1095,11 @@ class App {
             const allActions = [...actions1, ...actions2];
             if (allActions.length > 0) {
                 actionBlocks.push(`
-                    <div class="feedback-action-card">
-                        <h4 class="subsection-label">Top Actions For Next Pitch</h4>
-                        ${this.renderStringList(allActions, 'No actions provided')}
+                    <div class="feedback-action-card action-card-top-actions">
+                        <h4 class="top-actions-title">Top Actions For Next Pitch</h4>
+                        <ul class="top-actions-list">
+                            ${allActions.map(a => `<li class="top-actions-item">${this.escapeHtml(String(a || ''))}</li>`).join('')}
+                        </ul>
                     </div>
                 `);
             }
@@ -1106,10 +1110,6 @@ class App {
                     ${statusHtml}
                     ${actionBlocks.join('')}
                 </div>
-                <details class="raw-json">
-                    <summary>View raw JSON</summary>
-                    <pre>${this.escapeHtml(JSON.stringify(feedbackPayload, null, 2))}</pre>
-                </details>
             `;
             return;
         }
@@ -1172,10 +1172,6 @@ class App {
                 </div>
             </div>
 
-            <details class="raw-json">
-                <summary>View raw JSON</summary>
-                <pre>${this.escapeHtml(JSON.stringify(summary, null, 2))}</pre>
-            </details>
         `;
     }
 
@@ -1188,6 +1184,47 @@ class App {
         const verdictRaw = String(section.verdict || 'mixed').toLowerCase();
         const verdictLabel = verdictRaw.toUpperCase();
         const verdictClass = ['weak', 'strong'].includes(verdictRaw) ? verdictRaw : 'mixed';
+
+        // Custom rendering for Posture & Stillness section
+        if (section.criterion === 'Posture & Stillness') {
+            return this.renderPostureSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Eye Contact section
+        if (section.criterion === 'Eye Contact') {
+            return this.renderEyeContactSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Calm Confidence section
+        if (section.criterion === 'Calm Confidence') {
+            return this.renderCalmConfidenceSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Energy & Presence section
+        if (section.criterion === 'Energy & Presence') {
+            return this.renderEnergyPresenceSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Pacing & Emphasis section
+        if (section.criterion === 'Pacing & Emphasis') {
+            return this.renderPacingEmphasisSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Tone-Product Alignment section
+        if (section.criterion === 'Tone-Product Alignment') {
+            return this.renderToneProductSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Clarity & Conviction section (Round 2)
+        if (section.criterion === 'Clarity & Conviction') {
+            return this.renderClarityConvictionSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for strategic content sections (Round 1 & 2)
+        if (this._isStrategicSection(section.criterion)) {
+            return this.renderStrategicSection(section, criterion, verdictLabel, verdictClass);
+        }
+
         let detailsHtml = '';
 
         Object.entries(section).forEach(([key, value]) => {
@@ -1217,6 +1254,886 @@ class App {
             }
 
             if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderPostureSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Stability Percentage
+        if (section.stability_percentage != null) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Stability Percentage</h4>
+                    <p>${this.escapeHtml(String(section.stability_percentage))}</p>
+                </div>
+            `;
+        }
+
+        // 3) Stable Moments (positive / green)
+        const stableMoments = section.stable_moments;
+        if (Array.isArray(stableMoments)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-positive">Stable Moments</h4>
+                    ${this.renderMomentCards(stableMoments, 'positive')}
+                </div>
+            `;
+        }
+
+        // 4) Unstable Moments (corrective / yellow)
+        const unstableMoments = section.unstable_moments;
+        if (Array.isArray(unstableMoments)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Unstable Moments</h4>
+                    ${this.renderMomentCards(unstableMoments, 'corrective')}
+                </div>
+            `;
+        }
+
+        // 5) Remaining keys (catch-all for any extra fields)
+        const handledKeys = new Set(['criterion', 'verdict', 'overall_assessment', 'stability_percentage', 'stable_moments', 'unstable_moments']);
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderEyeContactSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Strong Eye Contact Moments (positive / green)
+        const strongMoments = section.strong_eye_contact_moments;
+        if (Array.isArray(strongMoments)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-positive">Strong Eye Contact Moments</h4>
+                    ${this.renderMomentCards(strongMoments, 'positive')}
+                </div>
+            `;
+        }
+
+        // 3) Look Away Moments (corrective / yellow)
+        const lookAwayMoments = section.look_away_moments;
+        if (Array.isArray(lookAwayMoments)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Look Away Moments</h4>
+                    ${this.renderMomentCards(lookAwayMoments, 'corrective')}
+                </div>
+            `;
+        }
+
+        // 4) Eye Contact Percentage
+        if (section.eye_contact_percentage != null) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Eye Contact Percentage</h4>
+                    <p>${this.escapeHtml(String(section.eye_contact_percentage))}</p>
+                </div>
+            `;
+        }
+
+        // 5) Remaining keys (catch-all for any extra fields)
+        const handledKeys = new Set(['criterion', 'verdict', 'overall_assessment', 'eye_contact_percentage', 'strong_eye_contact_moments', 'look_away_moments']);
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderCalmConfidenceSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Confident Moments (positive / green)
+        const confidentMoments = section.confident_moments;
+        if (Array.isArray(confidentMoments)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-positive">Confident Moments</h4>
+                    ${this.renderMomentCards(confidentMoments, 'positive')}
+                </div>
+            `;
+        }
+
+        // 3) Turned Away Events (corrective / yellow)
+        const turnedAwayEvents = section.turned_away_events;
+        if (Array.isArray(turnedAwayEvents)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Turned Away Events</h4>
+                    ${this.renderMomentCards(turnedAwayEvents, 'corrective')}
+                </div>
+            `;
+        }
+
+        // 4) Why Facing Matters
+        if (section.why_facing_matters) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Why Facing Matters</h4>
+                    <p>${this.escapeHtml(String(section.why_facing_matters))}</p>
+                </div>
+            `;
+        }
+
+        // 5) Facing Camera Percentage
+        if (section.facing_camera_percentage != null) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Facing Camera Percentage</h4>
+                    <p>${this.escapeHtml(String(section.facing_camera_percentage))}</p>
+                </div>
+            `;
+        }
+
+        // 6) Recommended Stance Adjustments
+        const stanceAdj = section.recommended_stance_adjustments;
+        if (Array.isArray(stanceAdj) && stanceAdj.length > 0) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Recommended Stance Adjustments</h4>
+                    ${this.renderStringList(stanceAdj, 'None')}
+                </div>
+            `;
+        }
+
+        // 7) Remaining keys (catch-all)
+        const handledKeys = new Set(['criterion', 'verdict', 'overall_assessment', 'confident_moments', 'turned_away_events', 'why_facing_matters', 'facing_camera_percentage', 'recommended_stance_adjustments']);
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderEnergyPresenceSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Well Delivered Moments (positive / green) — first
+        const wellDelivered = section.well_delivered_moments;
+        if (Array.isArray(wellDelivered)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-positive">Well Delivered Moments</h4>
+                    ${this.renderMomentCards(wellDelivered, 'positive')}
+                </div>
+            `;
+        }
+
+        // 2) Misaligned Moments (corrective / yellow)
+        const misaligned = section.misaligned_moments;
+        if (Array.isArray(misaligned)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Misaligned Moments</h4>
+                    ${this.renderMomentCards(misaligned, 'corrective')}
+                </div>
+            `;
+        }
+
+        // Remaining keys — but explicitly skip removed metrics
+        const hiddenKeys = new Set([
+            'criterion', 'verdict',
+            'well_delivered_moments', 'misaligned_moments',
+            'energy_timeline_summary', 'avg_f0_hz', 'avg_rms_db',
+            'pitch_range_hz', 'energy_range_db',
+        ]);
+        Object.entries(section).forEach(([key, value]) => {
+            if (hiddenKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderPacingEmphasisSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Well Paced Sentences (positive / green) — first
+        const wellPaced = section.well_paced_sentences;
+        if (Array.isArray(wellPaced)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-positive">Well Paced Sentences</h4>
+                    ${this.renderPacingCards(wellPaced, 'positive')}
+                </div>
+            `;
+        }
+
+        // 2) Rushed Important Sentences (corrective / yellow)
+        const rushed = section.rushed_important_sentences;
+        if (Array.isArray(rushed)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Rushed Important Sentences</h4>
+                    ${this.renderPacingCards(rushed, 'corrective')}
+                </div>
+            `;
+        }
+
+        // 3) Slow Low Priority Sentences (corrective / yellow)
+        const slow = section.slow_low_priority_sentences;
+        if (Array.isArray(slow)) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label moment-label-corrective">Slow Low Priority Sentences</h4>
+                    ${this.renderPacingCards(slow, 'corrective')}
+                </div>
+            `;
+        }
+
+        // Skip: overall_assessment and handled keys
+        const hiddenKeys = new Set([
+            'criterion', 'verdict',
+            'well_paced_sentences', 'rushed_important_sentences',
+            'slow_low_priority_sentences', 'overall_assessment',
+        ]);
+        Object.entries(section).forEach(([key, value]) => {
+            if (hiddenKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Renders pacing sentence cards with structure:
+     * Time Range → Sentence → Why/Note → WPM → Target WPM
+     */
+    renderPacingCards(items, colorTheme = 'positive') {
+        if (!Array.isArray(items) || items.length === 0) {
+            return '<p class="summary-muted">None</p>';
+        }
+
+        const cardClass = colorTheme === 'corrective' ? 'moment-card-corrective' : 'moment-card-positive';
+
+        return items.map(item => {
+            if (!item || typeof item !== 'object') {
+                return `<p>${this.escapeHtml(String(item || ''))}</p>`;
+            }
+
+            const timeRange = item.time_range || '';
+            const text = item.sentence_text || item.sentence || item.text || '';
+            const why = item.why || item.note || '';
+            const wpm = item.wpm;
+            const targetWpm = item.target_wpm;
+
+            let rows = '';
+
+            // 1) Time Range — primary
+            if (timeRange) {
+                rows += `<div class="moment-primary"><span class="moment-time">${this.escapeHtml(String(timeRange))}</span></div>`;
+            }
+
+            // 2) Sentence — primary
+            if (text) {
+                rows += `<div class="moment-primary"><span class="moment-text">"${this.escapeHtml(String(text))}"</span></div>`;
+            } else {
+                rows += `<div class="moment-primary"><span class="moment-text summary-muted">(Transcript unavailable for this segment)</span></div>`;
+            }
+
+            // 3) Why/Note — secondary
+            if (why) {
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">Why:</span> <span class="moment-detail-val">${this.escapeHtml(String(why))}</span></div>`;
+            }
+
+            // 4) WPM — secondary metric
+            if (wpm != null) {
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">WPM:</span> <span class="moment-detail-val">${this.escapeHtml(String(wpm))}</span></div>`;
+            }
+
+            // 5) Target WPM — secondary metric
+            if (targetWpm != null) {
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">Target WPM:</span> <span class="moment-detail-val">${this.escapeHtml(String(targetWpm))}</span></div>`;
+            }
+
+            // 6) Remaining fields
+            const handledKeys = new Set(['time_range', 'sentence_text', 'sentence', 'text', 'why', 'note', 'wpm', 'target_wpm']);
+            Object.entries(item).forEach(([k, v]) => {
+                if (handledKeys.has(k)) return;
+                const label = this.humanizeKey(k);
+                const val = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">${this.escapeHtml(label)}:</span> <span class="moment-detail-val">${this.escapeHtml(val)}</span></div>`;
+            });
+
+            return `<div class="obj-item ${cardClass}">${rows}</div>`;
+        }).join('');
+    }
+
+    renderToneProductSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        // 1) Target Tone Profile → Neutral
+        const targetTone = section.target_tone_profile;
+        if (Array.isArray(targetTone) && targetTone.length > 0) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-neutral-box">
+                    <h4 class="subsection-label semantic-label-neutral">Target Tone Profile</h4>
+                    ${this.renderStringList(targetTone, 'None')}
+                </div>
+            `;
+        }
+
+        // 2) Why This Tone → Neutral
+        if (section.why_this_tone) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-neutral-box">
+                    <h4 class="subsection-label semantic-label-neutral">Why This Tone</h4>
+                    <p>${this.escapeHtml(String(section.why_this_tone))}</p>
+                </div>
+            `;
+        }
+
+        // 3) Your Actual Tone → Neutral
+        if (section.your_actual_tone) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-neutral-box">
+                    <h4 class="subsection-label semantic-label-neutral">Your Actual Tone</h4>
+                    <p>${this.escapeHtml(String(section.your_actual_tone))}</p>
+                </div>
+            `;
+        }
+
+        // 4) Alignment Assessment → Negative (evaluation + shortcomings)
+        const alignment = section.alignment_assessment;
+        if (Array.isArray(alignment) && alignment.length > 0) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-negative-box">
+                    <h4 class="subsection-label semantic-label-negative">Alignment Assessment</h4>
+                    ${this.renderStringList(alignment, 'None')}
+                </div>
+            `;
+        }
+
+        // Skip: inferred_product_type (removed), recommended_adjustments, and handled keys
+        const hiddenKeys = new Set([
+            'criterion', 'verdict',
+            'target_tone_profile', 'why_this_tone', 'your_actual_tone',
+            'alignment_assessment', 'inferred_product_type', 'recommended_adjustments',
+        ]);
+        Object.entries(section).forEach(([key, value]) => {
+            if (hiddenKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Custom renderer for Clarity & Conviction section (Round 2).
+     * Ordered: Diagnosis (neg) → Timing Signals (neutral) → What Investors Felt (neg)
+     *        → What To Fix Next (neg) → Rewrite Lines (neutral) → catch-all
+     */
+    renderClarityConvictionSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+        const handledKeys = new Set(['criterion', 'verdict']);
+
+        const renderSub = (key, boxCls, labelCls) => {
+            const value = section[key];
+            if (value == null) return;
+            handledKeys.add(key);
+            const label = this.humanizeKey(key);
+
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        };
+
+        // 1) Diagnosis → Negative
+        renderSub('diagnosis', 'semantic-negative-box', 'semantic-label-negative');
+
+        // 2) Timing Signals Used → Neutral
+        renderSub('timing_signals_used', 'semantic-neutral-box', 'semantic-label-neutral');
+
+        // 3) What Investors Felt → Negative
+        renderSub('what_investors_felt', 'semantic-negative-box', 'semantic-label-negative');
+
+        // 4) What To Fix Next → Negative
+        renderSub('what_to_fix_next', 'semantic-negative-box', 'semantic-label-negative');
+
+        // 5) Rewrite Lines To Increase Conviction → Neutral (actionable)
+        renderSub('rewrite_lines_to_increase_conviction', 'semantic-neutral-box', 'semantic-label-neutral');
+
+        // Catch-all for remaining fields
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Shared renderer for moment cards across all sections.
+     * Renders each card in the order: Time Range → Text → Fix (if present) → Why.
+     * @param {Array} moments - Array of moment objects
+     * @param {'positive'|'corrective'} colorTheme - Visual theme for the card
+     */
+    renderMomentCards(moments, colorTheme = 'positive') {
+        if (!Array.isArray(moments) || moments.length === 0) {
+            return '<p class="summary-muted">None</p>';
+        }
+
+        const cardClass = colorTheme === 'corrective' ? 'moment-card-corrective' : 'moment-card-positive';
+
+        return moments.map(item => {
+            if (!item || typeof item !== 'object') {
+                return `<p>${this.escapeHtml(String(item || ''))}</p>`;
+            }
+
+            // Extract known fields for ordered rendering
+            const timeRange = item.time_range || '';
+            const text = item.sentence_text || item.text || '';
+            const fix = item.fix || '';
+            const why = item.why || '';
+
+            let rows = '';
+
+            // 1) Time Range — primary emphasis
+            if (timeRange) {
+                rows += `<div class="moment-primary"><span class="moment-time">${this.escapeHtml(String(timeRange))}</span></div>`;
+            }
+
+            // 2) Text / What was said — primary emphasis
+            if (text) {
+                rows += `<div class="moment-primary"><span class="moment-text">"${this.escapeHtml(String(text))}"</span></div>`;
+            } else {
+                rows += `<div class="moment-primary"><span class="moment-text summary-muted">(Transcript unavailable for this segment)</span></div>`;
+            }
+
+            // 3) Fix — secondary detail (if present)
+            if (fix) {
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">Fix:</span> <span class="moment-detail-val">${this.escapeHtml(String(fix))}</span></div>`;
+            }
+
+            // 4) Why — secondary detail
+            if (why) {
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">Why:</span> <span class="moment-detail-val">${this.escapeHtml(String(why))}</span></div>`;
+            }
+
+            // 5) Any remaining fields not already rendered
+            const handledMomentKeys = new Set(['time_range', 'sentence_text', 'text', 'why', 'fix']);
+            Object.entries(item).forEach(([k, v]) => {
+                if (handledMomentKeys.has(k)) return;
+                const label = this.humanizeKey(k);
+                const val = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+                rows += `<div class="moment-secondary"><span class="moment-detail-key">${this.escapeHtml(label)}:</span> <span class="moment-detail-val">${this.escapeHtml(val)}</span></div>`;
+            });
+
+            return `<div class="obj-item ${cardClass}">${rows}</div>`;
+        }).join('');
+    }
+
+    /**
+     * Returns true if the criterion belongs to a strategic content section
+     * (Problem Framing, Value Proposition, Differentiation, Business Model, Market Potential).
+     */
+    _isStrategicSection(criterion) {
+        const prefixes = [
+            'Problem Framing',
+            'Value Proposition',
+            'Differentiation & Defensibility',
+            'Business Model',
+            'Market Potential',
+        ];
+        return prefixes.some(p => criterion.startsWith(p));
+    }
+
+    /**
+     * Custom renderer for strategic content sections.
+     *
+     * Enforced internal order:
+     *   1. Neutral framing summaries (Diagnosis, Credible Market Framing)
+     *   2. Evidence Quotes            → GREEN
+     *   3. Missing Information / Vague → YELLOW
+     *   4. Recommended Rewrites        → BLUE
+     *   5. What Investors Will Question → YELLOW
+     *
+     * Color semantics are SEPARATE from the performance green/yellow
+     * used by Posture & Eye-Contact (Stable vs Unstable).
+     */
+    renderStrategicSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+        const handledKeys = new Set(['criterion', 'verdict']);
+
+        // Helper: render one sub-section with optional color box / label class
+        const renderSub = (key, boxCls, labelCls) => {
+            const value = section[key];
+            if (value == null) return;
+            handledKeys.add(key);
+
+            const label = this.humanizeKey(key);
+
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail ${boxCls}">
+                        <h4 class="subsection-label ${labelCls}">${this.escapeHtml(label)}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        };
+
+        // ── 1) Diagnosis → Negative (yellow/amber), Credible Market Framing → Neutral ──
+        renderSub('diagnosis', 'semantic-negative-box', 'semantic-label-negative');
+        renderSub('credible_market_framing', 'semantic-neutral-box', 'semantic-label-neutral');
+        renderSub('timing_signals_used', 'semantic-neutral-box', 'semantic-label-neutral');
+
+        // ── 2) Evidence Quotes → GREEN ──
+        for (const key of ['evidence_quotes']) {
+            renderSub(key, 'strategic-evidence-box', 'strategic-label-evidence');
+        }
+
+        // ── 3) Missing Information / Missing or Vague → YELLOW ──
+        for (const key of ['missing_information', 'missing_or_vague']) {
+            renderSub(key, 'strategic-missing-box', 'strategic-label-missing');
+        }
+
+        // ── 4) Recommended Rewrites → BLUE ──
+        for (const key of ['recommended_rewrites', 'recommended_lines']) {
+            renderSub(key, 'strategic-rewrite-box', 'strategic-label-rewrite');
+        }
+
+        // ── 5) What Investors Will Question → YELLOW ──
+        for (const key of ['what_investors_will_question', 'what_investors_need_to_hear']) {
+            renderSub(key, 'strategic-missing-box', 'strategic-label-missing');
+        }
+
+        // ── 6) Catch-all for any remaining unlisted fields ──
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
                 detailsHtml += `
                     <div class="criterion-detail">
                         <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
@@ -1284,7 +2201,31 @@ class App {
 
         const rows = Object.entries(obj).map(([k, v]) => {
             const label = this.humanizeKey(k);
-            const val = typeof v === 'number' ? v.toFixed(1) : String(v ?? '');
+
+            // Special handling for top_fillers (array of {token, count} objects)
+            if (k === 'top_fillers' && Array.isArray(v)) {
+                const chips = v.map(f => {
+                    if (f && typeof f === 'object') {
+                        const word = f.token || f.word || f.filler || '';
+                        const count = f.count != null ? f.count : '';
+                        return `<span class="filler-chip">${this.escapeHtml(String(word))}${count !== '' ? ` <span class="filler-chip-count">&times;${this.escapeHtml(String(count))}</span>` : ''}</span>`;
+                    }
+                    return `<span class="filler-chip">${this.escapeHtml(String(f))}</span>`;
+                }).join(' ');
+                return `<div class="metric-row metric-row-wide"><span class="metric-label">${this.escapeHtml(label)}</span><span class="metric-value filler-chips">${chips}</span></div>`;
+            }
+
+            // Handle arrays / objects gracefully (prevent [object Object])
+            let val;
+            if (typeof v === 'number') {
+                val = v.toFixed(1);
+            } else if (Array.isArray(v)) {
+                val = v.map(item => typeof item === 'object' ? JSON.stringify(item) : String(item ?? '')).join(', ');
+            } else if (v && typeof v === 'object') {
+                val = JSON.stringify(v);
+            } else {
+                val = String(v ?? '');
+            }
             return `<div class="metric-row"><span class="metric-label">${this.escapeHtml(label)}</span><span class="metric-value">${this.escapeHtml(val)}</span></div>`;
         }).join('');
 

@@ -261,6 +261,142 @@ body {
     display: none;
 }
 
+/* ── Studio vertical-stack layout (upload bar → recording) ── */
+.studio-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 32px;
+}
+
+.studio-stack.hidden {
+    display: none;
+}
+
+/* ── Deck Upload Top Bar ── */
+.deck-upload-bar {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.deck-upload-bar .upload-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 0;
+    background: var(--secondary-bg);
+    cursor: pointer;
+    transition: background 0.2s ease;
+    text-align: left;
+}
+
+.deck-upload-bar .upload-area:hover,
+.deck-upload-bar .upload-area.drag-over {
+    background: rgba(16, 163, 127, 0.06);
+}
+
+.upload-bar-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.upload-bar-cta {
+    font-size: 13px;
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+.upload-bar-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+/* File-info: inline when inside the upload bar */
+.deck-upload-bar .file-info {
+    display: none;
+    padding: 10px 20px;
+    background: white;
+    margin-top: 0;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.deck-upload-bar .file-info.active {
+    display: flex;
+}
+
+.file-info-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.deck-check {
+    color: #16A34A;
+    font-weight: 700;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.deck-upload-bar .file-name {
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 0;
+}
+
+.deck-upload-bar .file-size {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    margin-bottom: 0;
+}
+
+.deck-upload-bar .file-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.deck-upload-bar .status-message {
+    margin: 0;
+    border-radius: 0;
+    font-size: 13px;
+    padding: 8px 20px;
+}
+
+/* ── Recording Primary Card ── */
+.recording-primary {
+    flex: 1 1 auto;
+}
+
+.recording-primary .recording-area {
+    padding: 32px 20px 24px;
+}
+
+.recording-primary .camera-container {
+    max-width: 640px;
+    width: 100%;
+}
+
+.recording-primary #camera-preview {
+    aspect-ratio: 16 / 10;
+}
+
 /* Card Styles */
 .card {
     background-color: white;
@@ -932,6 +1068,174 @@ body {
     margin-bottom: 0;
 }
 
+/* ── Positive moment cards (Stable Moments, Strong Eye Contact) ── */
+.obj-item.moment-card-positive {
+    background: #F0FDF4;
+    border: 1px solid #BBF7D0;
+    border-left: 4px solid #4ADE80;
+}
+
+/* ── Corrective moment cards (Unstable Moments, Look Away) ── */
+.obj-item.moment-card-corrective {
+    background: #FEFCE8;
+    border: 1px solid #FDE68A;
+    border-left: 4px solid #FACC15;
+}
+
+/* ── Subsection label coloring for moment categories ── */
+.subsection-label.moment-label-positive {
+    color: #166534;
+}
+
+.subsection-label.moment-label-corrective {
+    color: #854D0E;
+}
+
+/* ── Strategic Section Semantic Colors ──
+   GREEN  = Evidence (what was actually said)
+   YELLOW = Missing / Investor Questions (risk & gaps)
+   BLUE   = Recommended Rewrites (actionable improvement)
+   These are SEPARATE from performance green/yellow (Stable/Unstable). ── */
+
+/* GREEN: Evidence Quotes */
+.strategic-evidence-box {
+    background: #F0FDF4;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    border-left: 4px solid #86EFAC;
+}
+
+.strategic-label-evidence {
+    color: #15803D;
+}
+
+/* YELLOW: Missing Information / Investor Questions */
+.strategic-missing-box {
+    background: #FEFCE8;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    border-left: 4px solid #FDE68A;
+}
+
+.strategic-label-missing {
+    color: #A16207;
+}
+
+/* BLUE: Recommended Rewrites */
+.strategic-rewrite-box {
+    background: #EFF6FF;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    border-left: 4px solid #93C5FD;
+}
+
+.strategic-label-rewrite {
+    color: #1D4ED8;
+}
+
+/* ── Semantic Neutral container (informational / descriptive) ── */
+.semantic-neutral-box {
+    background: #F9FAFB;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    border-left: 4px solid #D1D5DB;
+}
+
+.semantic-label-neutral {
+    color: #374151;
+}
+
+/* ── Semantic Negative container (evaluation, shortcomings, things to fix) ── */
+.semantic-negative-box {
+    background: #FEFCE8;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 14px;
+    border-left: 4px solid #FDE68A;
+}
+
+.semantic-label-negative {
+    color: #A16207;
+}
+
+/* ── Filler chips (Top Fillers inside Timing Signals) ── */
+.filler-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.filler-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: #F3F4F6;
+    border: 1px solid #E5E7EB;
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    white-space: nowrap;
+}
+
+.filler-chip-count {
+    font-weight: 400;
+    color: #6B7280;
+    font-size: 12px;
+}
+
+.metric-row-wide {
+    grid-column: 1 / -1;
+}
+
+/* ── Action Cards: Neutral styling ── */
+.action-card-neutral {
+    background: #F9FAFB;
+    border: 1px solid #D1D5DB;
+    border-left: 4px solid #D1D5DB;
+}
+
+/* ── Top Actions For Next Pitch: prominent card ── */
+.action-card-top-actions {
+    background: #F9FAFB;
+    border: 2px solid #9CA3AF;
+    border-radius: 12px;
+    padding: 28px 28px 24px;
+}
+
+.top-actions-title {
+    margin: 0 0 16px;
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.top-actions-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.top-actions-item {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.55;
+    color: var(--text-primary);
+    background: white;
+    border: 1px solid #E5E7EB;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+
 .obj-row {
     font-size: 14px;
     line-height: 1.6;
@@ -945,6 +1249,41 @@ body {
 
 .obj-val {
     color: #4B5563;
+}
+
+/* ── Moment card visual hierarchy ── */
+.moment-primary {
+    margin-bottom: 4px;
+}
+
+.moment-time {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    letter-spacing: 0.01em;
+}
+
+.moment-text {
+    font-size: 15px;
+    font-weight: 500;
+    color: #1F2937;
+    line-height: 1.5;
+}
+
+.moment-secondary {
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(55, 65, 81, 0.8);
+    margin-top: 4px;
+}
+
+.moment-detail-key {
+    font-weight: 600;
+    color: rgba(17, 24, 39, 0.75);
+}
+
+.moment-detail-val {
+    color: rgba(75, 85, 99, 0.85);
 }
 
 /* Metric summary rows (energy_timeline_summary) */
@@ -1031,25 +1370,6 @@ body {
     color: #166534;
 }
 
-.raw-json {
-    margin-top: 14px;
-}
-
-.raw-json summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-}
-
-.raw-json pre {
-    margin-top: 10px;
-    background: #111827;
-    color: #F3F4F6;
-    border-radius: 8px;
-    padding: 12px;
-    font-size: 12px;
-    overflow-x: auto;
-}
-
 /* Toast */
 .toast-area {
     position: fixed;
@@ -1131,6 +1451,16 @@ body {
 
     .studio-grid {
         grid-template-columns: 1fr;
+    }
+
+    .deck-upload-bar .upload-area {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .upload-bar-hint {
+        margin-left: 0;
+        width: 100%;
     }
 
     .hero-title {

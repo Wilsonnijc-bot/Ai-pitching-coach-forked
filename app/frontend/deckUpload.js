@@ -133,7 +133,7 @@ export class DeckUploader {
         this.currentFile = null;
         this.fileInput.value = '';
         this.fileInfo.classList.remove('active');
-        this.uploadArea.style.display = 'block';
+        this.uploadArea.style.display = '';
         this.hideStatus();
         if (this._onFileChange) this._onFileChange(false);
     }

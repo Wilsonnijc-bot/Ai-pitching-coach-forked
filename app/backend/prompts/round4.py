@@ -81,6 +81,7 @@ Output JSON schema (must match exactly):
       "stable_moments": [
         {
           "time_range": "M:SS–M:SS",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range (best-matching sentence that overlaps the window). Use null if transcript is unavailable.",
           "why": "Rationale: what content was being delivered, why stability here reinforces the message, and what impression it creates for investors."
         }
       ],
@@ -103,6 +104,7 @@ Output JSON schema (must match exactly):
         {
           "time_range": "M:SS–M:SS",
           "text": "transcript text at this moment",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range (best-matching sentence that overlaps the window). Use null if transcript is unavailable.",
           "why": "Rationale: why direct eye contact at this point strengthens the pitch and what it signals to investors."
         }
       ],
@@ -112,6 +114,7 @@ Output JSON schema (must match exactly):
           "direction": "left|right|down|away",
           "duration_sec": number,
           "likely_cause": "string (e.g., reading notes, checking slides)",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range. Use null if transcript is unavailable.",
           "why": "Rationale: what content was being delivered, why looking away here is problematic, and what investors conclude.",
           "fix": "concrete gaze technique instruction"
         }
@@ -125,6 +128,7 @@ Output JSON schema (must match exactly):
       "confident_moments": [
         {
           "time_range": "M:SS–M:SS",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range (best-matching sentence that overlaps the window). Use null if transcript is unavailable.",
           "why": "Rationale: why facing the audience at this point signals conviction and strengthens credibility."
         }
       ],
@@ -133,6 +137,7 @@ Output JSON schema (must match exactly):
           "time_range": "M:SS–M:SS",
           "duration_sec": number,
           "likely_cause": "string",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range. Use null if transcript is unavailable.",
           "why": "Rationale: what content was being delivered, why turning away here erodes trust, and what investors think.",
           "fix": "concrete body positioning instruction"
         }

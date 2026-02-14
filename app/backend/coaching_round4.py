@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-from .coaching_input import load_shared_input, SharedCoachingInput
+from .coaching_input import load_shared_input, SharedCoachingInput, WordTimestamp
 from .gcs_utils import download_blob_to_file
 from .llm_gptsapi import request_chat_completion
 from .prompts.round4 import ROUND_4_VERSION, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
@@ -144,6 +145,12 @@ def _validate_round4_schema(payload: dict) -> dict:
                 raise RuntimeError('"overall_assessment" must be a string in Posture & Stillness.')
             if not isinstance(section.get("stable_moments"), list):
                 raise RuntimeError('"stable_moments" must be an array.')
+            # Validate sentence_text in each stable moment (string or null)
+            for sm in section.get("stable_moments", []):
+                if isinstance(sm, dict) and "sentence_text" in sm:
+                    st = sm["sentence_text"]
+                    if st is not None and not isinstance(st, str):
+                        raise RuntimeError('"sentence_text" in stable_moments must be a string or null.')
             if not isinstance(section.get("unstable_moments"), list):
                 raise RuntimeError('"unstable_moments" must be an array.')
 
@@ -160,8 +167,20 @@ def _validate_round4_schema(payload: dict) -> dict:
                 raise RuntimeError('"overall_assessment" must be a string in Calm Confidence.')
             if not isinstance(section.get("confident_moments"), list):
                 raise RuntimeError('"confident_moments" must be an array.')
+            # Validate sentence_text in confident moments (string or null)
+            for cm in section.get("confident_moments", []):
+                if isinstance(cm, dict) and "sentence_text" in cm:
+                    st = cm["sentence_text"]
+                    if st is not None and not isinstance(st, str):
+                        raise RuntimeError('"sentence_text" in confident_moments must be a string or null.')
             if not isinstance(section.get("turned_away_events"), list):
                 raise RuntimeError('"turned_away_events" must be an array.')
+            # Validate sentence_text in turned away events (string or null)
+            for ta in section.get("turned_away_events", []):
+                if isinstance(ta, dict) and "sentence_text" in ta:
+                    st = ta["sentence_text"]
+                    if st is not None and not isinstance(st, str):
+                        raise RuntimeError('"sentence_text" in turned_away_events must be a string or null.')
             if not isinstance(section.get("why_facing_matters"), str):
                 raise RuntimeError('"why_facing_matters" must be a string.')
             if not isinstance(section.get("recommended_stance_adjustments"), list):
@@ -171,6 +190,73 @@ def _validate_round4_schema(payload: dict) -> dict:
         raise RuntimeError("Round 4 sections do not match required criteria.")
 
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Transcript alignment helpers
+# ---------------------------------------------------------------------------
+
+def _parse_time_range(time_range: str) -> tuple[float, float] | None:
+    """Parse a time range string like '0:00–0:10' or '1:30–2:00' into
+    (start_sec, end_sec).  Returns None if parsing fails."""
+    # Normalise various dash characters
+    tr = time_range.replace("\u2013", "-").replace("\u2014", "-").strip()
+    m = re.match(r"(\d+):(\d{1,2}(?:\.\d+)?)\s*-\s*(\d+):(\d{1,2}(?:\.\d+)?)", tr)
+    if not m:
+        return None
+    start = int(m.group(1)) * 60 + float(m.group(2))
+    end = int(m.group(3)) * 60 + float(m.group(4))
+    return (start, end)
+
+
+def _extract_sentence_for_window(
+    words: list[WordTimestamp],
+    start_sec: float,
+    end_sec: float,
+) -> str | None:
+    """Return the transcript text spoken during [start_sec, end_sec].
+
+    Selects all words whose time ranges overlap the window and joins them.
+    If no words overlap, returns None.
+    """
+    if not words:
+        return None
+    overlapping = [
+        w for w in words
+        if w.end > start_sec and w.start < end_sec
+    ]
+    if not overlapping:
+        return None
+    text = " ".join(w.word for w in overlapping).strip()
+    return text if text else None
+
+
+def _backfill_sentence_text(parsed: dict, words: list[WordTimestamp]) -> dict:
+    """For each moment card across all Round 4 sections, populate
+    sentence_text from the actual transcript word timestamps.  This ensures
+    accuracy even if the LLM hallucinated or omitted the text."""
+    # Map: criterion -> list of moment-array keys to backfill
+    _MOMENT_KEYS_BY_CRITERION: dict[str, list[str]] = {
+        "Posture & Stillness": ["stable_moments", "unstable_moments"],
+        "Eye Contact": ["strong_eye_contact_moments", "look_away_moments"],
+        "Calm Confidence": ["confident_moments", "turned_away_events"],
+    }
+
+    for section in parsed.get("sections", []):
+        criterion = section.get("criterion", "")
+        moment_keys = _MOMENT_KEYS_BY_CRITERION.get(criterion, [])
+        for key in moment_keys:
+            for moment in section.get(key, []):
+                tr = moment.get("time_range", "")
+                parsed_range = _parse_time_range(tr)
+                if parsed_range is None:
+                    if "sentence_text" not in moment:
+                        moment["sentence_text"] = None
+                    continue
+                start, end = parsed_range
+                extracted = _extract_sentence_for_window(words, start, end)
+                moment["sentence_text"] = extracted  # override with ground truth
+    return parsed
 
 
 def _build_round4_user_prompt(shared_input: SharedCoachingInput) -> str:
@@ -258,6 +344,10 @@ def run_round4(job_store: JobStore, job_id: str) -> dict:
         except Exception:
             repaired_output = _request_round4_output(_repair_prompt(raw_output))
             parsed = _validate_round4_schema(_parse_json(repaired_output))
+
+        # Backfill sentence_text from actual transcript word timestamps
+        # (overrides any LLM-generated text with ground truth)
+        parsed = _backfill_sentence_text(parsed, shared_input.words)
 
         job_store.update_job(
             job_id,

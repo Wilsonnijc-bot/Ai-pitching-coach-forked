@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
-from .coaching_input import load_shared_input, SharedCoachingInput
+from .coaching_input import load_shared_input, SharedCoachingInput, WordTimestamp
 from .llm_gptsapi import request_chat_completion
 from .prompts.round3 import ROUND_3_VERSION, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .storage import JobStore
@@ -61,18 +62,30 @@ def _validate_round3_schema(payload: dict) -> dict:
 
         # Section-specific validation
         if criterion == "Energy & Presence":
-            if not isinstance(section.get("energy_timeline_summary"), dict):
-                raise RuntimeError('"energy_timeline_summary" must be an object.')
             if not isinstance(section.get("well_delivered_moments"), list):
                 raise RuntimeError('"well_delivered_moments" must be an array.')
             if not isinstance(section.get("misaligned_moments"), list):
                 raise RuntimeError('"misaligned_moments" must be an array.')
+            # Validate sentence_text in moment arrays (string or null)
+            for arr_key in ("well_delivered_moments", "misaligned_moments"):
+                for m in section.get(arr_key, []):
+                    if isinstance(m, dict) and "sentence_text" in m:
+                        st = m["sentence_text"]
+                        if st is not None and not isinstance(st, str):
+                            raise RuntimeError(f'"sentence_text" in {arr_key} must be a string or null.')
 
         elif criterion == "Pacing & Emphasis":
             if not isinstance(section.get("overall_assessment"), list):
                 raise RuntimeError('"overall_assessment" must be an array.')
             if not isinstance(section.get("rushed_important_sentences"), list):
                 raise RuntimeError('"rushed_important_sentences" must be an array.')
+            # Validate sentence_text in pacing arrays (string or null)
+            for arr_key in ("rushed_important_sentences", "slow_low_priority_sentences", "well_paced_sentences"):
+                for m in section.get(arr_key, []):
+                    if isinstance(m, dict) and "sentence_text" in m:
+                        st = m["sentence_text"]
+                        if st is not None and not isinstance(st, str):
+                            raise RuntimeError(f'"sentence_text" in {arr_key} must be a string or null.')
 
         elif criterion == "Tone-Product Alignment":
             if not isinstance(section.get("inferred_product_type"), str):
@@ -92,6 +105,58 @@ def _validate_round3_schema(payload: dict) -> dict:
         raise RuntimeError("Round 3 sections do not match required criteria.")
 
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Transcript alignment helpers (reused from Round 4 pattern)
+# ---------------------------------------------------------------------------
+
+def _parse_time_range(time_range: str) -> tuple[float, float] | None:
+    """Parse a time range string like '0:00–0:10' into (start_sec, end_sec)."""
+    tr = time_range.replace("\u2013", "-").replace("\u2014", "-").strip()
+    m = re.match(r"(\d+):(\d{1,2}(?:\.\d+)?)\s*-\s*(\d+):(\d{1,2}(?:\.\d+)?)", tr)
+    if not m:
+        return None
+    start = int(m.group(1)) * 60 + float(m.group(2))
+    end = int(m.group(3)) * 60 + float(m.group(4))
+    return (start, end)
+
+
+def _extract_sentence_for_window(
+    words: list[WordTimestamp], start_sec: float, end_sec: float,
+) -> str | None:
+    if not words:
+        return None
+    overlapping = [w for w in words if w.end > start_sec and w.start < end_sec]
+    if not overlapping:
+        return None
+    text = " ".join(w.word for w in overlapping).strip()
+    return text if text else None
+
+
+def _backfill_round3_sentence_text(parsed: dict, words: list[WordTimestamp]) -> dict:
+    """For each moment in Energy & Presence and Pacing & Emphasis, backfill
+    sentence_text from the actual transcript word timestamps."""
+    _MOMENT_KEYS_BY_CRITERION: dict[str, list[str]] = {
+        "Energy & Presence": ["well_delivered_moments", "misaligned_moments"],
+        "Pacing & Emphasis": ["rushed_important_sentences", "slow_low_priority_sentences", "well_paced_sentences"],
+    }
+
+    for section in parsed.get("sections", []):
+        criterion = section.get("criterion", "")
+        moment_keys = _MOMENT_KEYS_BY_CRITERION.get(criterion, [])
+        for key in moment_keys:
+            for moment in section.get(key, []):
+                tr = moment.get("time_range", "")
+                parsed_range = _parse_time_range(tr)
+                if parsed_range is None:
+                    if "sentence_text" not in moment:
+                        moment["sentence_text"] = None
+                    continue
+                start, end = parsed_range
+                extracted = _extract_sentence_for_window(words, start, end)
+                moment["sentence_text"] = extracted
+    return parsed
 
 
 def _build_round3_user_prompt(shared_input: SharedCoachingInput) -> str:
@@ -154,6 +219,9 @@ def run_round3(job_store: JobStore, job_id: str) -> dict:
         except Exception:
             repaired_output = _request_round3_output(_repair_prompt(raw_output))
             parsed = _validate_round3_schema(_parse_json(repaired_output))
+
+        # Backfill sentence_text from actual transcript word timestamps
+        parsed = _backfill_round3_sentence_text(parsed, shared_input.words)
 
         job_store.update_job(
             job_id,

@@ -92,6 +92,7 @@ Output JSON schema (must match exactly):
         {
           "time_range": "M:SS–M:SS",
           "text": "exact transcript text",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range (best-matching sentence that overlaps the window). Use null if transcript is unavailable.",
           "why": "The rationale: what the content means at this point, why this energy/pitch level is the right match, and how it reinforces the message for the listener. Include dB/Hz references."
         }
       ],
@@ -99,6 +100,7 @@ Output JSON schema (must match exactly):
         {
           "time_range": "M:SS–M:SS",
           "text": "exact transcript text",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range. Use null if transcript is unavailable.",
           "why": "The rationale: what the content importance is here, what the energy/pitch should feel like and why, and why the current delivery undermines the message. Include dB/Hz references.",
           "fix": "concrete delivery instruction"
         }
@@ -110,7 +112,9 @@ Output JSON schema (must match exactly):
       "overall_assessment": [string],
       "rushed_important_sentences": [
         {
+          "time_range": "M:SS–M:SS",
           "sentence": "exact text",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range (best-matching sentence that overlaps the window). Use null if transcript is unavailable.",
           "wpm": number,
           "target_wpm": "range string e.g. 120-140",
           "why": "explanation"
@@ -118,14 +122,18 @@ Output JSON schema (must match exactly):
       ],
       "slow_low_priority_sentences": [
         {
+          "time_range": "M:SS–M:SS",
           "sentence": "exact text",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range. Use null if transcript is unavailable.",
           "wpm": number,
           "note": "explanation"
         }
       ],
       "well_paced_sentences": [
         {
+          "time_range": "M:SS–M:SS",
           "sentence": "exact text",
+          "sentence_text": "The transcript sentence or utterance spoken during this time range. Use null if transcript is unavailable.",
           "wpm": number,
           "note": "explanation"
         }
