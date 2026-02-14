@@ -327,7 +327,6 @@ def process_transcription_job(
         def _compute_body_language() -> Optional[dict]:
             try:
                 from .video_metrics import compute_body_language_metrics
-                # Load calibration data if available for personalised thresholds
                 cal_job = job_store.get_job(job_id)
                 cal_data = getattr(cal_job, "calibration_data", None) if cal_job else None
                 bl = compute_body_language_metrics(input_path, calibration=cal_data)
@@ -338,9 +337,15 @@ def process_transcription_job(
                         bl.get("summary", {}).get("total_frames_analyzed", 0),
                         bl.get("summary", {}).get("calibrated", False),
                     )
+                else:
+                    logger.warning(
+                        "job_id=%s body_language_metrics returned None — "
+                        "video may be unreadable (codec issue?) or has no frames",
+                        job_id,
+                    )
                 return bl
             except Exception:
-                logger.warning("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
+                logger.error("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
                 return None
 
         with ThreadPoolExecutor(max_workers=2) as pool:

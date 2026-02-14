@@ -24,6 +24,32 @@ from typing import Optional
 logger = logging.getLogger("uvicorn.error")
 
 # ---------------------------------------------------------------------------
+# Dependency availability — checked at import time so server logs show clearly
+# ---------------------------------------------------------------------------
+_CV2_AVAILABLE = False
+_MEDIAPIPE_AVAILABLE = False
+
+try:
+    import cv2  # noqa: F401
+    _CV2_AVAILABLE = True
+except ImportError:
+    logger.warning(
+        "opencv-python (cv2) is not installed — body language analysis will be "
+        "unavailable. Install with: pip install opencv-contrib-python"
+    )
+
+try:
+    import mediapipe  # noqa: F401
+    _MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    logger.warning(
+        "mediapipe is not installed — body language analysis will be "
+        "unavailable. Install with: pip install 'mediapipe>=0.10'"
+    )
+
+BODY_LANGUAGE_AVAILABLE = _CV2_AVAILABLE and _MEDIAPIPE_AVAILABLE
+
+# ---------------------------------------------------------------------------
 # Configuration constants (defaults — overridden by calibration when available)
 # ---------------------------------------------------------------------------
 SAMPLE_INTERVAL_SEC = 0.5          # extract one frame every 0.5 s
@@ -220,14 +246,20 @@ def compute_body_language_metrics(
 
     Returns ``None`` if dependencies are missing or the video cannot be read.
     """
-    try:
-        import cv2
-        import mediapipe as mp
-    except ImportError:
-        logger.warning(
-            "opencv-python / mediapipe not installed — skipping body-language metrics"
+    if not BODY_LANGUAGE_AVAILABLE:
+        missing = []
+        if not _CV2_AVAILABLE:
+            missing.append("opencv-python (pip install opencv-contrib-python)")
+        if not _MEDIAPIPE_AVAILABLE:
+            missing.append("mediapipe (pip install 'mediapipe>=0.10')")
+        logger.error(
+            "Body language analysis unavailable — missing: %s",
+            ", ".join(missing),
         )
         return None
+
+    import cv2
+    import mediapipe as mp
 
     video_path = str(video_path)
     converted_mp4: Optional[Path] = None  # track temp file for cleanup

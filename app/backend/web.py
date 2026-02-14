@@ -183,7 +183,12 @@ def _cleanup_deck_file(storage_path: Optional[str]) -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "storage": job_store.storage_name}
+    from .video_metrics import BODY_LANGUAGE_AVAILABLE
+    return {
+        "status": "ok",
+        "storage": job_store.storage_name,
+        "body_language_available": BODY_LANGUAGE_AVAILABLE,
+    }
 
 
 @app.post("/api/jobs", response_model=CreateJobResponse)

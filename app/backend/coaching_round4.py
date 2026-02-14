@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .coaching_input import load_shared_input, SharedCoachingInput
-from .gcs_utils import download_blob_to_file, get_default_bucket
+from .gcs_utils import download_blob_to_file
 from .llm_gptsapi import request_chat_completion
 from .prompts.round4 import ROUND_4_VERSION, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .storage import JobStore
@@ -34,13 +34,24 @@ def _recompute_body_language(job_store: JobStore, job_id: str) -> Optional[dict]
     """Try to recompute body-language metrics by downloading the video from
     GCS and running MediaPipe analysis.  Returns the metrics dict on success
     or ``None`` on any failure."""
+    from .video_metrics import BODY_LANGUAGE_AVAILABLE
+    if not BODY_LANGUAGE_AVAILABLE:
+        logger.error("job_id=%s cannot compute body language: mediapipe/opencv not installed", job_id)
+        return None
+
     job = job_store.get_job(job_id)
     if not job:
+        logger.warning("job_id=%s job not found for body language recomputation", job_id)
         return None
 
     video_gcs_uri = getattr(job, "video_gcs_uri", None) or ""
     if not video_gcs_uri:
-        logger.info("job_id=%s no video_gcs_uri stored — cannot recompute body language", job_id)
+        logger.error(
+            "job_id=%s no video_gcs_uri stored — the video was never uploaded to GCS. "
+            "This usually means the initial upload failed or used a code path that "
+            "doesn't persist the video.",
+            job_id,
+        )
         return None
 
     # Parse gs://bucket/blob from the URI
@@ -59,15 +70,35 @@ def _recompute_body_language(job_store: JobStore, job_id: str) -> Optional[dict]
     suffix = Path(blob_path).suffix or ".webm"
     local_video = tmp_dir / f"video{suffix}"
     try:
+        logger.info("job_id=%s downloading video from gs://%s/%s", job_id, bucket, blob_path)
         download_blob_to_file(bucket, blob_path, local_video)
+        file_size = local_video.stat().st_size
+        logger.info("job_id=%s downloaded video (%d bytes)", job_id, file_size)
+        if file_size == 0:
+            logger.error("job_id=%s downloaded video is empty (0 bytes)", job_id)
+            return None
+
         from .video_metrics import compute_body_language_metrics
 
         # Load calibration data if available
         cal_data = getattr(job, "calibration_data", None)
         result = compute_body_language_metrics(local_video, calibration=cal_data)
+        if result is None:
+            logger.warning(
+                "job_id=%s compute_body_language_metrics returned None — "
+                "video may be unreadable or too short",
+                job_id,
+            )
         return result
+    except FileNotFoundError:
+        logger.error(
+            "job_id=%s video blob not found in GCS (gs://%s/%s) — "
+            "it may have been deleted or the upload never completed",
+            job_id, bucket, blob_path,
+        )
+        return None
     except Exception:
-        logger.warning("job_id=%s body_language recomputation failed", job_id, exc_info=True)
+        logger.error("job_id=%s body_language recomputation failed", job_id, exc_info=True)
         return None
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
