@@ -327,12 +327,16 @@ def process_transcription_job(
         def _compute_body_language() -> Optional[dict]:
             try:
                 from .video_metrics import compute_body_language_metrics
-                bl = compute_body_language_metrics(input_path)
+                # Load calibration data if available for personalised thresholds
+                cal_job = job_store.get_job(job_id)
+                cal_data = getattr(cal_job, "calibration_data", None) if cal_job else None
+                bl = compute_body_language_metrics(input_path, calibration=cal_data)
                 if bl is not None:
                     logger.info(
-                        "job_id=%s body_language_metrics_done frames=%s",
+                        "job_id=%s body_language_metrics_done frames=%s calibrated=%s",
                         job_id,
                         bl.get("summary", {}).get("total_frames_analyzed", 0),
+                        bl.get("summary", {}).get("calibrated", False),
                     )
                 return bl
             except Exception:

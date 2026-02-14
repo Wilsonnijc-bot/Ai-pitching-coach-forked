@@ -52,6 +52,7 @@ class JobRecord:
     has_diarization: Optional[bool] = None
     artifacts_error: Optional[str] = None
     video_gcs_uri: Optional[str] = None
+    calibration_data: Optional[dict] = None
     error: Optional[str] = None
 
 

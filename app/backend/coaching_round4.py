@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Optional
 
 from .coaching_input import load_shared_input, SharedCoachingInput
+from .gcs_utils import download_blob_to_file, get_default_bucket
 from .llm_gptsapi import request_chat_completion
 from .prompts.round4 import ROUND_4_VERSION, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from .storage import JobStore
@@ -23,6 +28,49 @@ def _truncate(text: str, max_chars: int = MAX_ERROR_CHARS) -> str:
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 3] + "..."
+
+
+def _recompute_body_language(job_store: JobStore, job_id: str) -> Optional[dict]:
+    """Try to recompute body-language metrics by downloading the video from
+    GCS and running MediaPipe analysis.  Returns the metrics dict on success
+    or ``None`` on any failure."""
+    job = job_store.get_job(job_id)
+    if not job:
+        return None
+
+    video_gcs_uri = getattr(job, "video_gcs_uri", None) or ""
+    if not video_gcs_uri:
+        logger.info("job_id=%s no video_gcs_uri stored — cannot recompute body language", job_id)
+        return None
+
+    # Parse gs://bucket/blob from the URI
+    if not video_gcs_uri.startswith("gs://"):
+        logger.warning("job_id=%s invalid video_gcs_uri=%s", job_id, video_gcs_uri)
+        return None
+
+    stripped = video_gcs_uri[len("gs://"):]
+    slash_idx = stripped.find("/")
+    if slash_idx <= 0:
+        return None
+    bucket = stripped[:slash_idx]
+    blob_path = stripped[slash_idx + 1:]
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"r4_bl_{job_id}_"))
+    suffix = Path(blob_path).suffix or ".webm"
+    local_video = tmp_dir / f"video{suffix}"
+    try:
+        download_blob_to_file(bucket, blob_path, local_video)
+        from .video_metrics import compute_body_language_metrics
+
+        # Load calibration data if available
+        cal_data = getattr(job, "calibration_data", None)
+        result = compute_body_language_metrics(local_video, calibration=cal_data)
+        return result
+    except Exception:
+        logger.warning("job_id=%s body_language recomputation failed", job_id, exc_info=True)
+        return None
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _parse_json(raw_content: str) -> dict:
@@ -149,14 +197,27 @@ def run_round4(job_store: JobStore, job_id: str) -> dict:
     try:
         shared_input = load_shared_input(job_store, job_id)
 
-        # Check that body language data is available
+        # Check that body language data is available; recompute on demand
+        # from the GCS-stored video if missing.
         derived = shared_input.derived_metrics.model_dump()
         body_language = derived.get("body_language")
         if not body_language:
-            raise RuntimeError(
-                "Body language metrics are not available for this job. "
-                "The video may have been too short or processing failed."
-            )
+            logger.info("job_id=%s round4 body_language missing, attempting recomputation", job_id)
+            body_language = _recompute_body_language(job_store, job_id)
+            if body_language:
+                # Persist so future rounds don't need to recompute
+                derived["body_language"] = body_language
+                job_store.update_job(job_id, derived_metrics=derived)
+                shared_input.derived_metrics = shared_input.derived_metrics.model_copy(
+                    update={"body_language": body_language}
+                )
+                logger.info("job_id=%s round4 body_language recomputed successfully", job_id)
+            else:
+                raise RuntimeError(
+                    "Body language metrics could not be computed for this job. "
+                    "The video may not have been uploaded, was too short, "
+                    "or required libraries (mediapipe/opencv) are unavailable."
+                )
 
         user_prompt = _build_round4_user_prompt(shared_input)
         raw_output = _request_round4_output(user_prompt)

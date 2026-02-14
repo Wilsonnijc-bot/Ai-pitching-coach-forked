@@ -27,6 +27,31 @@ async function readErrorDetail(response, fallbackMessage) {
 }
 
 /**
+ * Upload a calibration selfie for a prepared job.
+ * The backend extracts iris/shoulder/clothing baselines to improve
+ * body-language detection during video analysis.
+ * @param {string} jobId
+ * @param {Blob}   photoBlob - JPEG/PNG image blob
+ * @returns {Promise<{job_id:string, calibration:object}>}
+ */
+export async function uploadCalibrationPhoto(jobId, photoBlob) {
+    const formData = new FormData();
+    formData.append('photo', photoBlob, 'calibration.jpg');
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/calibrate`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Calibration failed (${response.status})`,
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/**
  * Create a transcription job by uploading video (and optional deck).
  * Includes automatic retry with exponential backoff for upload reliability.
  * @param {Blob} videoBlob

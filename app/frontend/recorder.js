@@ -154,6 +154,60 @@ export class VideoRecorder {
     }
 
     /**
+     * Capture a single frame from the live camera preview as a JPEG Blob.
+     * Used for the pre-recording calibration snapshot.
+     * @returns {Promise<Blob>} JPEG image blob
+     */
+    captureCalibrationFrame() {
+        return new Promise((resolve, reject) => {
+            if (!this.stream) {
+                reject(new Error('Camera not initialized. Call initialize() first.'));
+                return;
+            }
+
+            const videoTrack = this.stream.getVideoTracks()[0];
+            if (!videoTrack) {
+                reject(new Error('No video track available.'));
+                return;
+            }
+
+            const settings = videoTrack.getSettings();
+            const width = settings.width || 640;
+            const height = settings.height || 480;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+
+            // Create a temporary video element to draw the current frame
+            const tempVideo = document.createElement('video');
+            tempVideo.srcObject = this.stream;
+            tempVideo.muted = true;
+            tempVideo.playsInline = true;
+
+            tempVideo.onloadeddata = () => {
+                ctx.drawImage(tempVideo, 0, 0, width, height);
+                tempVideo.srcObject = null;
+                canvas.toBlob(
+                    (blob) => {
+                        if (blob) {
+                            resolve(blob);
+                        } else {
+                            reject(new Error('Failed to capture frame as JPEG.'));
+                        }
+                    },
+                    'image/jpeg',
+                    0.85,
+                );
+            };
+
+            tempVideo.onerror = () => reject(new Error('Failed to load camera stream for capture.'));
+            tempVideo.play().catch(reject);
+        });
+    }
+
+    /**
      * Clean up resources (stops camera & mic tracks)
      */
     cleanup() {

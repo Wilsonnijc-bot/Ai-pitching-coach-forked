@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs, uploadCalibrationPhoto } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -168,7 +168,23 @@ class App {
                         <h2 class="card-title">Record your pitch</h2>
 
                         <div class="recording-area">
-                            <video id="camera-preview" autoplay muted playsinline></video>
+                            <div class="camera-container" id="camera-container">
+                                <video id="camera-preview" autoplay muted playsinline></video>
+                                <div class="distance-guide" id="distance-guide">
+                                    <div class="guide-silhouette">
+                                        <svg viewBox="0 0 200 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <!-- Head -->
+                                            <ellipse cx="100" cy="60" rx="40" ry="50" stroke="rgba(255,255,255,0.6)" stroke-width="2" stroke-dasharray="6 4" fill="none"/>
+                                            <!-- Shoulders -->
+                                            <path d="M30 170 Q35 130 60 120 Q80 115 100 115 Q120 115 140 120 Q165 130 170 170" stroke="rgba(255,255,255,0.6)" stroke-width="2" stroke-dasharray="6 4" fill="none"/>
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="distance-banner" id="distance-banner">
+                                    <span class="distance-icon">📏</span>
+                                    <span>Stay <strong>0.5 – 1 m</strong> from camera (about arm's length)</span>
+                                </div>
+                            </div>
 
                             <button class="record-button" id="record-btn">
                                 <div class="record-icon"></div>
@@ -352,6 +368,84 @@ class App {
                 preview.srcObject = this.videoRecorder.getStream();
             }
 
+            // Show the distance guide overlay and banner
+            const distanceGuide = document.getElementById('distance-guide');
+            const distanceBanner = document.getElementById('distance-banner');
+            if (distanceGuide) distanceGuide.classList.add('visible');
+            if (distanceBanner) distanceBanner.classList.add('visible');
+
+            // ── Calibration step: capture a selfie for body-language baselines ──
+            this.setRecordingStatus(
+                'Position yourself: stand at arm\'s length (0.5 – 1 m), face the camera, align with the silhouette guide, and hold still...',
+                'info',
+                true,
+            );
+            // Small delay so the camera auto-exposure stabilises and the user
+            // has a moment to get into position.
+            await new Promise(r => setTimeout(r, 1500));
+
+            try {
+                this.setRecordingStatus('Capturing calibration snapshot...', 'info', true);
+                const calibrationBlob = await this.videoRecorder.captureCalibrationFrame();
+                // Prepare the job shell first so we have a job_id for calibration
+                const prepared = await prepareJob();
+                this._calibrationJobId = prepared.job_id;
+                const calResult = await uploadCalibrationPhoto(prepared.job_id, calibrationBlob);
+
+                // Show distance feedback from calibration
+                if (calResult && calResult.calibration) {
+                    const cal = calResult.calibration;
+                    if (cal.distance_ok === false) {
+                        // Distance is not ideal — warn the user and give them time to adjust
+                        this._showDistanceFeedback(cal.distance_status, cal.distance_feedback);
+                        this.setRecordingStatus(
+                            cal.distance_feedback + ' Adjust and hold still — re-calibrating in 3s...',
+                            'warning',
+                            true,
+                        );
+                        await new Promise(r => setTimeout(r, 3000));
+                        // Re-capture after user adjusts
+                        try {
+                            const recalBlob = await this.videoRecorder.captureCalibrationFrame();
+                            const recalResult = await uploadCalibrationPhoto(prepared.job_id, recalBlob);
+                            if (recalResult && recalResult.calibration) {
+                                const recal = recalResult.calibration;
+                                this._showDistanceFeedback(recal.distance_status, recal.distance_feedback);
+                                if (recal.distance_ok) {
+                                    this.setRecordingStatus('Distance adjusted — starting recording...', 'success', false);
+                                } else {
+                                    this.setRecordingStatus(
+                                        recal.distance_feedback + ' Proceeding anyway — try to maintain arm\'s length.',
+                                        'warning',
+                                        false,
+                                    );
+                                }
+                            }
+                        } catch (recalErr) {
+                            console.warn('Re-calibration failed (non-fatal):', recalErr.message);
+                        }
+                    } else {
+                        this._showDistanceFeedback('ok', cal.distance_feedback);
+                        this.setRecordingStatus('Calibration done — starting recording...', 'success', false);
+                    }
+                } else {
+                    this.setRecordingStatus('Calibration done — starting recording...', 'success', false);
+                }
+            } catch (calErr) {
+                console.warn('Calibration snapshot failed (non-fatal):', calErr.message);
+                // Calibration is optional — proceed without it
+                this.setRecordingStatus('Starting recording (calibration skipped)...', 'info', false);
+                this._calibrationJobId = null;
+            }
+
+            // Hide the silhouette guide but keep the distance banner as a reminder
+            if (distanceGuide) distanceGuide.classList.remove('visible');
+            const banner = document.getElementById('distance-banner');
+            if (banner) {
+                banner.classList.add('recording-reminder');
+                banner.innerHTML = '<span class="distance-icon">📏</span> <span>Maintain <strong>0.5 – 1 m</strong> distance — stay consistent for accurate analysis</span>';
+            }
+
             this.isRecording = true;
             this.isStopping = false;
             this.setRecordButtonState('recording', false);
@@ -404,6 +498,9 @@ class App {
             const preview = document.getElementById('camera-preview');
             if (preview) { preview.srcObject = null; }
 
+            // Clean up distance guide / banner
+            this._hideDistanceOverlays();
+
             this.isRecording = false;
             this.isStopping = false;
             this.setStage('idle');
@@ -451,10 +548,15 @@ class App {
 
             let jobId;
             try {
-                // ── Direct-to-GCS upload (bypasses Heroku entirely) ──
+                // ── Reuse calibration job or prepare a new one ──
                 this.setRecordingStatus('Preparing upload...', 'info', true);
-                const prepared = await prepareJob();
-                jobId = prepared.job_id;
+                if (this._calibrationJobId) {
+                    jobId = this._calibrationJobId;
+                    this._calibrationJobId = null;
+                } else {
+                    const prepared = await prepareJob();
+                    jobId = prepared.job_id;
+                }
 
                 let gcsUploadSucceeded = false;
                 try {
@@ -1298,9 +1400,45 @@ class App {
             return;
         }
 
-        const safeType = ['success', 'error', 'info'].includes(type) ? type : 'info';
+        const safeType = ['success', 'error', 'info', 'warning'].includes(type) ? type : 'info';
         element.textContent = text;
         element.className = `status-message active ${safeType}${loading ? ' loading' : ''}`;
+    }
+
+    /**
+     * Show a distance-status indicator on the camera container.
+     * @param {'ok'|'too_close'|'too_far'} status
+     * @param {string} message
+     */
+    _showDistanceFeedback(status, message) {
+        const container = document.getElementById('camera-container');
+        if (!container) return;
+
+        // Remove any previous feedback
+        container.querySelectorAll('.distance-feedback').forEach(el => el.remove());
+
+        const el = document.createElement('div');
+        el.className = `distance-feedback ${status === 'ok' ? 'distance-ok' : 'distance-warn'}`;
+        el.innerHTML = `<span class="distance-icon">${status === 'ok' ? '✅' : '⚠️'}</span> <span>${message}</span>`;
+        container.appendChild(el);
+
+        // Auto-hide after 6 seconds
+        setTimeout(() => el.remove(), 6000);
+    }
+
+    /** Remove the distance guide and banner overlays. */
+    _hideDistanceOverlays() {
+        const guide = document.getElementById('distance-guide');
+        const banner = document.getElementById('distance-banner');
+        if (guide) guide.classList.remove('visible');
+        if (banner) {
+            banner.classList.remove('visible', 'recording-reminder');
+        }
+        // Remove any lingering feedback badges
+        const container = document.getElementById('camera-container');
+        if (container) {
+            container.querySelectorAll('.distance-feedback').forEach(el => el.remove());
+        }
     }
 
     showStatusActions(actions) {
@@ -1376,6 +1514,7 @@ class App {
             timer.textContent = '00:00';
         }
         this.setRecordButtonState('idle', false);
+        this._hideDistanceOverlays();
         this.applyStudioLayout();
 
         // Re-apply deck gate after reset

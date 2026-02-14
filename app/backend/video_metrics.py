@@ -15,21 +15,72 @@ from __future__ import annotations
 
 import logging
 import math
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("uvicorn.error")
 
 # ---------------------------------------------------------------------------
-# Configuration constants
+# Configuration constants (defaults — overridden by calibration when available)
 # ---------------------------------------------------------------------------
 SAMPLE_INTERVAL_SEC = 0.5          # extract one frame every 0.5 s
 SHOULDER_DEVIATION_THRESHOLD = 0.035  # normalised Y deviation from baseline
 ROLLING_BASELINE_WINDOW = 10       # number of frames for rolling average (5 s)
 IRIS_CENTER_LOW = 0.35             # iris ratio thresholds for "looking at camera"
 IRIS_CENTER_HIGH = 0.65
+IRIS_TOLERANCE = 0.15              # ± tolerance around calibrated iris centre
 HEAD_YAW_THRESHOLD_DEG = 25.0      # degrees; beyond ⇒ "turned away"
 TURNED_AWAY_MIN_DURATION_SEC = 3.0  # consecutive turned-away before flagging
+
+
+def _build_thresholds(calibration: Optional[dict]) -> dict:
+    """Compute per-session thresholds from calibration data.
+
+    If *calibration* is ``None`` the returned dict contains the module-level
+    defaults, so all downstream code can just read from the dict.
+    """
+    t: dict = {
+        "iris_center_low": IRIS_CENTER_LOW,
+        "iris_center_high": IRIS_CENTER_HIGH,
+        "shoulder_deviation_threshold": SHOULDER_DEVIATION_THRESHOLD,
+        "head_yaw_threshold_deg": HEAD_YAW_THRESHOLD_DEG,
+        "shoulder_natural_diff": 0.0,
+        "head_yaw_offset_deg": 0.0,
+    }
+    if not calibration:
+        return t
+
+    # --- Iris: use calibrated centre ± tolerance ---
+    iris_baseline = calibration.get("iris_baseline_ratio")
+    if iris_baseline is not None:
+        t["iris_center_low"] = max(0.0, iris_baseline - IRIS_TOLERANCE)
+        t["iris_center_high"] = min(1.0, iris_baseline + IRIS_TOLERANCE)
+        logger.info(
+            "Calibrated iris thresholds: %.3f – %.3f (baseline=%.3f)",
+            t["iris_center_low"], t["iris_center_high"], iris_baseline,
+        )
+
+    # --- Shoulders: account for natural tilt ---
+    natural_diff = calibration.get("shoulder_baseline_diff")
+    if natural_diff is not None and natural_diff > 0:
+        # Increase deviation threshold by the person's natural asymmetry
+        t["shoulder_deviation_threshold"] = SHOULDER_DEVIATION_THRESHOLD + natural_diff
+        t["shoulder_natural_diff"] = natural_diff
+        logger.info(
+            "Calibrated shoulder threshold: %.4f (natural_diff=%.4f)",
+            t["shoulder_deviation_threshold"], natural_diff,
+        )
+
+    # --- Head yaw: offset centre ---
+    yaw_offset = calibration.get("head_yaw_baseline_deg")
+    if yaw_offset is not None:
+        t["head_yaw_offset_deg"] = yaw_offset
+        logger.info("Calibrated head yaw offset: %.1f°", yaw_offset)
+
+    return t
 
 
 # ---------------------------------------------------------------------------
@@ -95,12 +146,77 @@ def _format_ts(sec: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Codec fallback: .webm → .mp4 via system ffmpeg
+# ---------------------------------------------------------------------------
+
+def _convert_webm_to_mp4(src: str | Path) -> Optional[Path]:
+    """Convert *src* to an H.264 .mp4 in a temp directory.
+
+    Returns the path to the new file, or ``None`` if ffmpeg is missing or
+    the conversion fails.  The caller is responsible for cleaning up the
+    temp directory (``mp4_path.parent``).
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("ffmpeg not on PATH — cannot convert video for body-language analysis")
+        return None
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="bl_conv_"))
+    mp4_path = tmp_dir / "converted.mp4"
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i", str(src),
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "28",        # visually OK for pose detection; fast & small
+        "-an",               # drop audio — not needed for body-language
+        "-movflags", "+faststart",
+        str(mp4_path),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            stderr_tail = (result.stderr or "").strip().splitlines()[-3:]
+            logger.warning(
+                "ffmpeg webm→mp4 conversion failed (rc=%d): %s",
+                result.returncode, " | ".join(stderr_tail),
+            )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None
+    except subprocess.TimeoutExpired:
+        logger.warning("ffmpeg conversion timed out (120 s)")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
+    except Exception:
+        logger.warning("ffmpeg conversion error", exc_info=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
+
+    if not mp4_path.exists() or mp4_path.stat().st_size == 0:
+        logger.warning("ffmpeg produced empty mp4 output")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
+
+    logger.info("Converted %s → %s (%d KB)", src, mp4_path, mp4_path.stat().st_size // 1024)
+    return mp4_path
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
+def compute_body_language_metrics(
+    video_path: str | Path,
+    calibration: Optional[dict] = None,
+) -> Optional[dict]:
     """Analyse *video_path* and return a dict with posture / eye-contact /
     facing timelines plus summary aggregates.
+
+    If *calibration* is provided (from a pre-recording selfie), thresholds
+    for iris detection, shoulder stability, and head yaw are personalised.
 
     Returns ``None`` if dependencies are missing or the video cannot be read.
     """
@@ -114,15 +230,36 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
         return None
 
     video_path = str(video_path)
+    converted_mp4: Optional[Path] = None  # track temp file for cleanup
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        logger.warning("Could not open video for body-language analysis: %s", video_path)
-        return None
+        # Fallback: the video may be .webm VP9/VP8 that this OpenCV build
+        # cannot decode.  Try converting to H.264 .mp4 via system ffmpeg
+        # (which the project already requires for audio extraction).
+        logger.info(
+            "cv2.VideoCapture could not open %s — attempting ffmpeg conversion to mp4",
+            video_path,
+        )
+        converted_mp4 = _convert_webm_to_mp4(video_path)
+        if converted_mp4 is not None:
+            cap = cv2.VideoCapture(str(converted_mp4))
+        if converted_mp4 is None or not cap.isOpened():
+            logger.warning("Could not open video for body-language analysis: %s", video_path)
+            if converted_mp4 is not None:
+                shutil.rmtree(converted_mp4.parent, ignore_errors=True)
+            return None
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_interval = max(1, int(round(fps * SAMPLE_INTERVAL_SEC)))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+    thresholds = _build_thresholds(calibration)
+    shoulder_dev_thresh = thresholds["shoulder_deviation_threshold"]
+    iris_low = thresholds["iris_center_low"]
+    iris_high = thresholds["iris_center_high"]
+    yaw_threshold = thresholds["head_yaw_threshold_deg"]
+    yaw_offset = thresholds["head_yaw_offset_deg"]
 
     mp_pose = mp.solutions.pose
     mp_face_mesh = mp.solutions.face_mesh
@@ -216,7 +353,7 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
                 # Facing camera: combination of head yaw and body orientation
                 yaw_val = head_yaws[-1]
                 is_facing = True
-                if yaw_val is not None and abs(yaw_val) > HEAD_YAW_THRESHOLD_DEG:
+                if yaw_val is not None and abs(yaw_val - yaw_offset) > yaw_threshold:
                     is_facing = False
                 facing_camera.append(is_facing)
 
@@ -224,6 +361,9 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
                 frame_idx += 1
     finally:
         cap.release()
+        # Clean up temp mp4 if we created one via ffmpeg conversion
+        if converted_mp4 is not None:
+            shutil.rmtree(converted_mp4.parent, ignore_errors=True)
 
     if not timestamps:
         logger.warning("No frames extracted from video for body-language analysis")
@@ -239,7 +379,7 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
     for i in range(len(timestamps)):
         dev_left = abs(left_shoulder_ys[i] - baseline_left[i])
         dev_right = abs(right_shoulder_ys[i] - baseline_right[i])
-        stable = (dev_left < SHOULDER_DEVIATION_THRESHOLD) and (dev_right < SHOULDER_DEVIATION_THRESHOLD)
+        stable = (dev_left < shoulder_dev_thresh) and (dev_right < shoulder_dev_thresh)
         posture_stable.append(stable)
 
     # ------------------------------------------------------------------
@@ -251,7 +391,7 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
             # Face not detected → count as no eye contact
             eye_contact_flags.append(False)
         else:
-            eye_contact_flags.append(IRIS_CENTER_LOW <= ratio <= IRIS_CENTER_HIGH)
+            eye_contact_flags.append(iris_low <= ratio <= iris_high)
 
     # ------------------------------------------------------------------
     # Post-process: Turned-away events (consecutive facing=False > threshold)
@@ -334,9 +474,9 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
                     ]
                     if ratios_in_range:
                         avg = sum(ratios_in_range) / len(ratios_in_range)
-                        if avg < IRIS_CENTER_LOW:
+                        if avg < iris_low:
                             direction = "left"
-                        elif avg > IRIS_CENTER_HIGH:
+                        elif avg > iris_high:
                             direction = "right"
                         else:
                             direction = "away"
@@ -357,9 +497,9 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
             direction = "unknown"
             if ratios_in_range:
                 avg = sum(ratios_in_range) / len(ratios_in_range)
-                if avg < IRIS_CENTER_LOW:
+                if avg < iris_low:
                     direction = "left"
-                elif avg > IRIS_CENTER_HIGH:
+                elif avg > iris_high:
                     direction = "right"
                 else:
                     direction = "away"
@@ -415,7 +555,12 @@ def compute_body_language_metrics(video_path: str | Path) -> Optional[dict]:
         "unstable_event_count": len(unstable_events),
         "look_away_event_count": len(look_away_events),
         "turned_away_event_count": len(turned_away_events),
+        "calibrated": calibration is not None,
     }
+    if calibration is not None:
+        summary["calibration_iris_range"] = [round(iris_low, 3), round(iris_high, 3)]
+        summary["calibration_shoulder_threshold"] = round(shoulder_dev_thresh, 4)
+        summary["calibration_yaw_offset"] = round(yaw_offset, 1)
 
     return {
         "posture_timeline": posture_timeline,

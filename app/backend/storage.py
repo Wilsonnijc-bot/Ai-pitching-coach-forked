@@ -80,6 +80,7 @@ class JobStore(Protocol):
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
         video_gcs_uri: object = UNSET,
+        calibration_data: object = UNSET,
         error: object = UNSET,
     ) -> None:
         pass
@@ -150,6 +151,7 @@ class InMemoryJobStore:
                 has_diarization=None,
                 artifacts_error=None,
                 video_gcs_uri=None,
+                calibration_data=None,
                 error=None,
             )
 
@@ -191,6 +193,7 @@ class InMemoryJobStore:
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
         video_gcs_uri: object = UNSET,
+        calibration_data: object = UNSET,
         error: object = UNSET,
     ) -> None:
         with self._lock:
@@ -255,6 +258,8 @@ class InMemoryJobStore:
                 job.artifacts_error = artifacts_error
             if video_gcs_uri is not UNSET:
                 job.video_gcs_uri = video_gcs_uri
+            if calibration_data is not UNSET:
+                job.calibration_data = calibration_data
             if error is not UNSET:
                 job.error = error
             job.updated_at = utc_now()
@@ -345,6 +350,7 @@ class PostgresJobStore:
                         has_diarization BOOLEAN NULL,
                         artifacts_error TEXT NULL,
                         video_gcs_uri TEXT NULL,
+                        calibration_data JSONB NULL,
                         error TEXT NULL
                     )
                     """
@@ -623,6 +629,12 @@ class PostgresJobStore:
                 )
                 cur.execute(
                     """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS calibration_data JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS deck_assets (
                         job_id UUID PRIMARY KEY
                             REFERENCES transcription_jobs(job_id)
@@ -676,9 +688,10 @@ class PostgresJobStore:
                         has_diarization,
                         artifacts_error,
                         video_gcs_uri,
+                        calibration_data,
                         error
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         job_id,
@@ -707,6 +720,7 @@ class PostgresJobStore:
                         None,
                         "r4_v1",
                         "pending",
+                        None,
                         None,
                         None,
                         None,
@@ -754,6 +768,7 @@ class PostgresJobStore:
                         tj.has_diarization,
                         tj.artifacts_error,
                         tj.video_gcs_uri,
+                        tj.calibration_data,
                         tj.error,
                         da.filename,
                         da.content_type,
@@ -803,6 +818,7 @@ class PostgresJobStore:
                     has_diarization,
                     artifacts_error,
                     video_gcs_uri,
+                    calibration_data,
                     error,
                     deck_filename,
                     deck_content_type,
@@ -829,6 +845,8 @@ class PostgresJobStore:
                     feedback_round_3 = json.loads(feedback_round_3)
                 if feedback_round_4 is not None and isinstance(feedback_round_4, str):
                     feedback_round_4 = json.loads(feedback_round_4)
+                if calibration_data is not None and isinstance(calibration_data, str):
+                    calibration_data = json.loads(calibration_data)
 
                 deck = None
                 if deck_filename:
@@ -874,6 +892,7 @@ class PostgresJobStore:
                     has_diarization=has_diarization,
                     artifacts_error=artifacts_error,
                     video_gcs_uri=video_gcs_uri,
+                    calibration_data=calibration_data,
                     error=error,
                 )
 
@@ -911,6 +930,7 @@ class PostgresJobStore:
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
         video_gcs_uri: object = UNSET,
+        calibration_data: object = UNSET,
         error: object = UNSET,
     ) -> None:
         assignments: List[str] = []
@@ -1006,6 +1026,9 @@ class PostgresJobStore:
         if video_gcs_uri is not UNSET:
             assignments.append("video_gcs_uri = %s")
             values.append(video_gcs_uri)
+        if calibration_data is not UNSET:
+            assignments.append("calibration_data = %s")
+            values.append(Jsonb(calibration_data) if calibration_data is not None else None)
         if error is not UNSET:
             assignments.append("error = %s")
             values.append(error)

@@ -42,6 +42,7 @@ from .models import (
     SummarizeResponse,
 )
 from .summarization import process_summary_job
+from .calibration import extract_calibration_data
 from .storage import build_job_store
 from .transcription import process_deck_only_job, process_transcription_job, write_upload_to_disk
 
@@ -220,6 +221,41 @@ async def create_transcription_job(
         deck_upload,
     )
     return CreateJobResponse(job_id=job_id, status="queued")
+
+
+@app.post("/api/jobs/{job_id}/calibrate")
+async def upload_calibration_photo(
+    job_id: str,
+    photo: UploadFile = File(...),
+) -> dict:
+    """Accept a selfie snapshot taken before recording and extract
+    personal baselines (iris position, shoulder height, clothing colour)
+    that improve body-language detection accuracy."""
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    # Accept common image types
+    suffix = Path(photo.filename or "").suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Photo must be .jpg, .png, or .webp.")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"cal_{job_id}_"))
+    tmp_path = tmp_dir / f"calibration{suffix}"
+    try:
+        await write_upload_to_disk(photo, tmp_path, field_name="photo", max_size_bytes=5 * 1024 * 1024)
+        cal_data = extract_calibration_data(tmp_path)
+        if cal_data is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not detect face or body in the photo. "
+                       "Please stand facing the camera in good lighting and try again.",
+            )
+        job_store.update_job(job_id, calibration_data=cal_data)
+        logger.info("job_id=%s calibration_data_saved keys=%s", job_id, list(cal_data.keys()))
+        return {"job_id": job_id, "calibration": cal_data}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.post("/api/jobs/prepare", response_model=CreateJobResponse)
