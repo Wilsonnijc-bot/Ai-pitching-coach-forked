@@ -1,0 +1,11 @@
+#!/bin/bash
+# Heroku post-compile hook: swap GUI opencv (pulled by mediapipe) with headless.
+# The headless variant doesn't require libGL / X11 system libraries.
+set -e
+
+echo "-----> Swapping opencv-contrib-python → headless variant"
+pip uninstall -y opencv-contrib-python 2>/dev/null || true
+# opencv-contrib-python-headless is already installed from requirements.txt;
+# just verify it's present.
+python -c "import cv2; print('cv2 version:', cv2.__version__)"
+echo "-----> opencv swap complete"
