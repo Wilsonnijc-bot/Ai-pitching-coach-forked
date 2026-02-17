@@ -18,6 +18,7 @@ from .coaching_round1 import run_round1
 from .coaching_round2 import run_round2
 from .coaching_round3 import run_round3
 from .coaching_round4 import run_round4
+from .coaching_round5 import run_round5
 from .deck_extractor import (
     detect_extension,
     sanitize_filename,
@@ -39,6 +40,7 @@ from .models import (
     Round2FeedbackResponse,
     Round3FeedbackResponse,
     Round4FeedbackResponse,
+    Round5FeedbackResponse,
     SummarizeResponse,
 )
 from .summarization import process_summary_job
@@ -596,6 +598,10 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         feedback_round_4=job.feedback_round_4,
         feedback_round_4_version=job.feedback_round_4_version,
         feedback_round_4_error=job.feedback_round_4_error,
+        feedback_round_5_status=job.feedback_round_5_status,
+        feedback_round_5=job.feedback_round_5,
+        feedback_round_5_version=job.feedback_round_5_version,
+        feedback_round_5_error=job.feedback_round_5_error,
         result=job.result,
         video_gcs_uri=job.video_gcs_uri,
         error=job.error,
@@ -750,6 +756,37 @@ def generate_round4_feedback(job_id: str) -> Round4FeedbackResponse:
     )
     _fire_and_forget(run_round4, job_store, job_id)
     return Round4FeedbackResponse(job_id=job_id, status="running")
+
+
+@app.post("/api/jobs/{job_id}/feedback/round5", response_model=Round5FeedbackResponse)
+def generate_round5_feedback(job_id: str) -> Round5FeedbackResponse:
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    transcript_payload = job.result if isinstance(job.result, dict) else {}
+    transcript_text = str(
+        job.transcript_full_text or transcript_payload.get("full_text") or ""
+    ).strip()
+    if not transcript_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcript is missing for this job. Wait for transcription to finish first.",
+        )
+
+    if job.feedback_round_5_status == "done" and isinstance(job.feedback_round_5, dict):
+        return Round5FeedbackResponse(job_id=job_id, status="done")
+    if job.feedback_round_5_status == "running":
+        return Round5FeedbackResponse(job_id=job_id, status="running")
+
+    job_store.update_job(
+        job_id,
+        feedback_round_5_status="running",
+        feedback_round_5_error=None,
+        feedback_round_5_version="r5_v1",
+    )
+    _fire_and_forget(run_round5, job_store, job_id)
+    return Round5FeedbackResponse(job_id=job_id, status="running")
 
 
 @app.post("/api/jobs/{job_id}/llm_test", response_model=LLMTestResponse)

@@ -47,10 +47,6 @@ def _validate_round2_schema(payload: dict) -> dict:
     if not isinstance(top_actions, list):
         raise RuntimeError('Round 2 payload must include "top_3_actions_for_next_pitch" as an array.')
 
-    tightened = payload.get("tightened_30_second_structure")
-    if not isinstance(tightened, list):
-        raise RuntimeError('Round 2 payload must include "tightened_30_second_structure" as an array.')
-
     required_by_criterion = {
         "Clarity & Conviction": {
             "diagnosis",

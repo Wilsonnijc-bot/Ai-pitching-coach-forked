@@ -64,7 +64,7 @@ Response:
 ```json
 {
   "job_id": "<uuid>",
-  "status": "queued|deck_processing|transcribing|uploading_audio_to_gcs|stt_batch_recognize|waiting_for_stt|parsing_results|summarizing|done|failed",
+  "status": "queued|deck_processing|transcribing|uploading_audio_to_gcs|stt_batch_recognize|waiting_for_stt|parsing_results|computing_metrics|writing_artifacts|summarizing|done|failed",
   "progress": 0,
   "transcript": {
     "full_text": "",
@@ -215,6 +215,8 @@ Background behavior:
 - `stt_batch_recognize` -> V2 BatchRecognize request submitted (`progress=40`)
 - `waiting_for_stt` -> waiting for long-running operation (`progress=60`)
 - `parsing_results` -> reading/parsing V2 JSON output from GCS (`progress=80`)
+- `computing_metrics` -> local tone/body-language analysis from audio/video (`progress=85`)
+- `writing_artifacts` -> transcript/words/diarization artifacts upload (`progress=90`)
 - `summarizing` -> GPTsAPI summary generation (`progress=70..90`)
 - `done` -> transcript + optional deck ready (`progress=100`)
 - `failed` -> error stored in DB

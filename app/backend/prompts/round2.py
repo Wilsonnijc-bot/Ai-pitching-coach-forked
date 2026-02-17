@@ -136,7 +136,6 @@ Output schema (must match exactly):
       "recommended_lines": [string]
     }
   ],
-  "tightened_30_second_structure": [string],
   "top_3_actions_for_next_pitch": [string]
 }
 

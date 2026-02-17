@@ -76,6 +76,10 @@ class JobStore(Protocol):
         feedback_round_4_version: object = UNSET,
         feedback_round_4_status: object = UNSET,
         feedback_round_4_error: object = UNSET,
+        feedback_round_5: object = UNSET,
+        feedback_round_5_version: object = UNSET,
+        feedback_round_5_status: object = UNSET,
+        feedback_round_5_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -147,6 +151,10 @@ class InMemoryJobStore:
                 feedback_round_4_version="r4_v1",
                 feedback_round_4_status="pending",
                 feedback_round_4_error=None,
+                feedback_round_5=None,
+                feedback_round_5_version="r5_v1",
+                feedback_round_5_status="pending",
+                feedback_round_5_error=None,
                 artifacts_gcs_prefix=None,
                 has_diarization=None,
                 artifacts_error=None,
@@ -189,6 +197,10 @@ class InMemoryJobStore:
         feedback_round_4_version: object = UNSET,
         feedback_round_4_status: object = UNSET,
         feedback_round_4_error: object = UNSET,
+        feedback_round_5: object = UNSET,
+        feedback_round_5_version: object = UNSET,
+        feedback_round_5_status: object = UNSET,
+        feedback_round_5_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -250,6 +262,14 @@ class InMemoryJobStore:
                 job.feedback_round_4_status = feedback_round_4_status
             if feedback_round_4_error is not UNSET:
                 job.feedback_round_4_error = feedback_round_4_error
+            if feedback_round_5 is not UNSET:
+                job.feedback_round_5 = feedback_round_5
+            if feedback_round_5_version is not UNSET:
+                job.feedback_round_5_version = feedback_round_5_version
+            if feedback_round_5_status is not UNSET:
+                job.feedback_round_5_status = feedback_round_5_status
+            if feedback_round_5_error is not UNSET:
+                job.feedback_round_5_error = feedback_round_5_error
             if artifacts_gcs_prefix is not UNSET:
                 job.artifacts_gcs_prefix = artifacts_gcs_prefix
             if has_diarization is not UNSET:
@@ -346,6 +366,10 @@ class PostgresJobStore:
                         feedback_round_4_version TEXT NOT NULL DEFAULT 'r4_v1',
                         feedback_round_4_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_4_error TEXT NULL,
+                        feedback_round_5 JSONB NULL,
+                        feedback_round_5_version TEXT NOT NULL DEFAULT 'r5_v1',
+                        feedback_round_5_status TEXT NOT NULL DEFAULT 'pending',
+                        feedback_round_5_error TEXT NULL,
                         artifacts_gcs_prefix TEXT NULL,
                         has_diarization BOOLEAN NULL,
                         artifacts_error TEXT NULL,
@@ -630,6 +654,56 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_5 JSONB NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_5_version TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_5_status TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ADD COLUMN IF NOT EXISTS feedback_round_5_error TEXT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_5_version SET DEFAULT 'r5_v1'
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
+                    ALTER COLUMN feedback_round_5_status SET DEFAULT 'pending'
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_5_version = 'r5_v1'
+                    WHERE feedback_round_5_version IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE transcription_jobs
+                    SET feedback_round_5_status = 'pending'
+                    WHERE feedback_round_5_status IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE transcription_jobs
                     ADD COLUMN IF NOT EXISTS calibration_data JSONB NULL
                     """
                 )
@@ -684,6 +758,10 @@ class PostgresJobStore:
                         feedback_round_4_version,
                         feedback_round_4_status,
                         feedback_round_4_error,
+                        feedback_round_5,
+                        feedback_round_5_version,
+                        feedback_round_5_status,
+                        feedback_round_5_error,
                         artifacts_gcs_prefix,
                         has_diarization,
                         artifacts_error,
@@ -691,7 +769,7 @@ class PostgresJobStore:
                         calibration_data,
                         error
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         job_id,
@@ -719,6 +797,10 @@ class PostgresJobStore:
                         None,
                         None,
                         "r4_v1",
+                        "pending",
+                        None,
+                        None,
+                        "r5_v1",
                         "pending",
                         None,
                         None,
@@ -764,6 +846,10 @@ class PostgresJobStore:
                         tj.feedback_round_4_version,
                         tj.feedback_round_4_status,
                         tj.feedback_round_4_error,
+                        tj.feedback_round_5,
+                        tj.feedback_round_5_version,
+                        tj.feedback_round_5_status,
+                        tj.feedback_round_5_error,
                         tj.artifacts_gcs_prefix,
                         tj.has_diarization,
                         tj.artifacts_error,
@@ -814,6 +900,10 @@ class PostgresJobStore:
                     feedback_round_4_version,
                     feedback_round_4_status,
                     feedback_round_4_error,
+                    feedback_round_5,
+                    feedback_round_5_version,
+                    feedback_round_5_status,
+                    feedback_round_5_error,
                     artifacts_gcs_prefix,
                     has_diarization,
                     artifacts_error,
@@ -845,6 +935,8 @@ class PostgresJobStore:
                     feedback_round_3 = json.loads(feedback_round_3)
                 if feedback_round_4 is not None and isinstance(feedback_round_4, str):
                     feedback_round_4 = json.loads(feedback_round_4)
+                if feedback_round_5 is not None and isinstance(feedback_round_5, str):
+                    feedback_round_5 = json.loads(feedback_round_5)
                 if calibration_data is not None and isinstance(calibration_data, str):
                     calibration_data = json.loads(calibration_data)
 
@@ -888,6 +980,10 @@ class PostgresJobStore:
                     feedback_round_4_version=feedback_round_4_version,
                     feedback_round_4_status=feedback_round_4_status,
                     feedback_round_4_error=feedback_round_4_error,
+                    feedback_round_5=feedback_round_5,
+                    feedback_round_5_version=feedback_round_5_version,
+                    feedback_round_5_status=feedback_round_5_status,
+                    feedback_round_5_error=feedback_round_5_error,
                     artifacts_gcs_prefix=artifacts_gcs_prefix,
                     has_diarization=has_diarization,
                     artifacts_error=artifacts_error,
@@ -926,6 +1022,10 @@ class PostgresJobStore:
         feedback_round_4_version: object = UNSET,
         feedback_round_4_status: object = UNSET,
         feedback_round_4_error: object = UNSET,
+        feedback_round_5: object = UNSET,
+        feedback_round_5_version: object = UNSET,
+        feedback_round_5_status: object = UNSET,
+        feedback_round_5_error: object = UNSET,
         artifacts_gcs_prefix: object = UNSET,
         has_diarization: object = UNSET,
         artifacts_error: object = UNSET,
@@ -1014,6 +1114,18 @@ class PostgresJobStore:
         if feedback_round_4_error is not UNSET:
             assignments.append("feedback_round_4_error = %s")
             values.append(feedback_round_4_error)
+        if feedback_round_5 is not UNSET:
+            assignments.append("feedback_round_5 = %s")
+            values.append(Jsonb(feedback_round_5) if feedback_round_5 is not None else None)
+        if feedback_round_5_version is not UNSET:
+            assignments.append("feedback_round_5_version = %s")
+            values.append(feedback_round_5_version)
+        if feedback_round_5_status is not UNSET:
+            assignments.append("feedback_round_5_status = %s")
+            values.append(feedback_round_5_status)
+        if feedback_round_5_error is not UNSET:
+            assignments.append("feedback_round_5_error = %s")
+            values.append(feedback_round_5_error)
         if artifacts_gcs_prefix is not UNSET:
             assignments.append("artifacts_gcs_prefix = %s")
             values.append(artifacts_gcs_prefix)
