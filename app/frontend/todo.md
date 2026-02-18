@@ -7,7 +7,9 @@
 - **Style**: Modern Minimalism + Light Mode + Professional
 
 ### Color Palette
-- Primary: #10A37F (Teal Green - accent/CTAs)
+- Primary: #9234EA (Purple - accent/CTAs)
+- Purple Text/Link: #7E22CE
+- Purple Surface: #EADCF7
 - Secondary: #F7F7F8 (Light Gray - backgrounds)
 - Sidebar: #FFFFFF (White - sidebar background)
 - Text: #2D333A (Dark Gray - primary text)
@@ -24,9 +26,9 @@
 - Small: font-weight 400 (14px)
 
 ### Key Component Styles
-- **Buttons**: Primary (#10A37F background, white text, 8px rounded), Secondary (white background, border, hover state)
+- **Buttons**: Primary (#9234EA background, white text, 8px rounded), Secondary (white background, border, hover state)
 - **Cards**: White background, 1px border (#E5E5E5), 12px rounded, subtle shadow
-- **Sidebar Items**: 8px rounded, hover background (#F0F0F0), active state with teal accent
+- **Sidebar Items**: 8px rounded, hover background (#F0F0F0), active state with purple accent
 - **Upload Zone**: Dashed border, hover state, drag-over visual feedback
 
 ### Layout & Spacing
@@ -36,10 +38,10 @@
 - Section padding: 40px vertical
 
 ### Images to Generate
-1. **logo-icon.png** - Simple microphone or speech bubble icon for branding (Style: minimalist, vector-style, teal accent)
+1. **logo-icon.png** - Simple microphone or speech bubble icon for branding (Style: minimalist, vector-style, purple accent)
 2. **hero-background.jpg** - Subtle abstract background for landing page hero section (Style: soft gradients, professional, light colors)
-3. **upload-illustration.png** - Friendly illustration for upload area (Style: minimalist line art, teal accent)
-4. **recording-visual.png** - Waveform or audio visualization graphic (Style: modern, dynamic, teal accent)
+3. **upload-illustration.png** - Friendly illustration for upload area (Style: minimalist line art, purple accent)
+4. **recording-visual.png** - Waveform or audio visualization graphic (Style: modern, dynamic, purple accent)
 
 ---
 
