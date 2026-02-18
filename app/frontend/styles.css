@@ -1122,30 +1122,56 @@ body {
 }
 
 .section-see-more-btn {
-    background: none;
-    border: none;
-    padding: 0;
-    margin-top: 12px;
+    width: 100%;
+    border: 1px solid #FB923C;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-top: 14px;
     display: inline-flex;
+    justify-content: center;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     cursor: pointer;
-    color: #7C3AED;
-    font-size: 15px;
-    font-weight: 600;
+    color: #6D28D9;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
     line-height: 1.2;
+    background: linear-gradient(135deg, #FED7AA 0%, #FDBA74 45%, #FB923C 100%);
+    background-size: 180% 180%;
+    background-position: 0% 50%;
+    box-shadow: 0 8px 18px rgba(251, 146, 60, 0.28);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background-position 0.25s ease;
 }
 
 .section-see-more-btn:hover {
-    color: #6D28D9;
-    text-decoration: underline;
+    color: #5B21B6;
+    background-position: 100% 50%;
+    transform: translateY(-1px) scale(1.01);
+    box-shadow: 0 12px 24px rgba(251, 146, 60, 0.35);
+}
+
+.section-see-more-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 6px 14px rgba(251, 146, 60, 0.26);
+}
+
+.section-see-more-btn:focus-visible {
+    outline: 3px solid rgba(109, 40, 217, 0.35);
+    outline-offset: 2px;
 }
 
 .section-see-more-btn .see-more-arrow {
+    display: inline-block;
     transition: transform 0.2s ease;
 }
 
+.section-see-more-btn:not(.expanded) .see-more-arrow {
+    animation: seeMoreArrowPulse 1.35s ease-in-out infinite;
+}
+
 .section-see-more-btn.expanded .see-more-arrow {
+    animation: none;
     transform: translateY(1px);
 }
 
@@ -1165,6 +1191,18 @@ body {
     to {
         opacity: 1;
         transform: translateY(0);
+    }
+}
+
+@keyframes seeMoreArrowPulse {
+    0% {
+        transform: translateX(0);
+    }
+    50% {
+        transform: translateX(4px);
+    }
+    100% {
+        transform: translateX(0);
     }
 }
 
