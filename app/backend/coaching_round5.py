@@ -52,13 +52,8 @@ def _validate_round5_schema(payload: dict) -> dict:
         seen_criteria.add(criterion)
 
         if criterion == "Overview":
-            for key in (
-                "overall_evaluation",
-                "summary_of_content_analysis",
-                "summary_of_delivery_analysis",
-            ):
-                if not isinstance(section.get(key), str):
-                    raise RuntimeError(f'"{key}" must be a string in Overview.')
+            if not isinstance(section.get("overall_evaluation"), str):
+                raise RuntimeError('"overall_evaluation" must be a string in Overview.')
             if not isinstance(section.get("key_strengths"), list):
                 raise RuntimeError('"key_strengths" must be an array in Overview.')
             if not isinstance(section.get("areas_of_improvement"), list):

@@ -1423,32 +1423,12 @@ class App {
             `;
         }
 
-        if (section.summary_of_content_analysis) {
-            detailsHtml += `
-                <div class="criterion-detail semantic-neutral-box">
-                    <h4 class="subsection-label semantic-label-neutral">Summary Of Content Analysis</h4>
-                    <p>${this.escapeHtml(String(section.summary_of_content_analysis))}</p>
-                </div>
-            `;
-        }
-
-        if (section.summary_of_delivery_analysis) {
-            detailsHtml += `
-                <div class="criterion-detail semantic-neutral-box">
-                    <h4 class="subsection-label semantic-label-neutral">Summary Of Delivery Analysis</h4>
-                    <p>${this.escapeHtml(String(section.summary_of_delivery_analysis))}</p>
-                </div>
-            `;
-        }
-
         const handledKeys = new Set([
             'criterion',
             'verdict',
             'overall_evaluation',
             'key_strengths',
             'areas_of_improvement',
-            'summary_of_content_analysis',
-            'summary_of_delivery_analysis',
         ]);
         Object.entries(section).forEach(([key, value]) => {
             if (handledKeys.has(key)) return;
@@ -1900,7 +1880,17 @@ class App {
     renderEnergyPresenceSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Well Delivered Moments (positive / green) — first
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Well Delivered Moments (positive / green)
         const wellDelivered = section.well_delivered_moments;
         if (Array.isArray(wellDelivered)) {
             detailsHtml += `
@@ -1911,7 +1901,7 @@ class App {
             `;
         }
 
-        // 2) Misaligned Moments (corrective / yellow)
+        // 3) Misaligned Moments (corrective / yellow)
         const misaligned = section.misaligned_moments;
         if (Array.isArray(misaligned)) {
             detailsHtml += `
@@ -1925,6 +1915,7 @@ class App {
         // Remaining keys — but explicitly skip removed metrics
         const hiddenKeys = new Set([
             'criterion', 'verdict',
+            'overall_assessment',
             'well_delivered_moments', 'misaligned_moments',
             'energy_timeline_summary', 'avg_f0_hz', 'avg_rms_db',
             'pitch_range_hz', 'energy_range_db',
@@ -1972,7 +1963,30 @@ class App {
     renderPacingEmphasisSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Well Paced Sentences (positive / green) — first
+        // 1) Overall Assessment (first)
+        const pacingAssessment = section.overall_assessment;
+        if (typeof pacingAssessment === 'string' && pacingAssessment.trim()) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(pacingAssessment)}</p>
+                </div>
+            `;
+        } else if (Array.isArray(pacingAssessment) && pacingAssessment.length > 0) {
+            // Backward compatibility for older v1 payloads.
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(pacingAssessment.map(v => String(v || '')).join(' '))}</p>
+                </div>
+            `;
+        }
+        const hasRenderedPacingAssessment = Boolean(
+            (typeof pacingAssessment === 'string' && pacingAssessment.trim()) ||
+            (Array.isArray(pacingAssessment) && pacingAssessment.length > 0)
+        );
+
+        // 2) Well Paced Sentences (positive / green)
         const wellPaced = section.well_paced_sentences;
         if (Array.isArray(wellPaced)) {
             detailsHtml += `
@@ -1983,7 +1997,7 @@ class App {
             `;
         }
 
-        // 2) Rushed Important Sentences (corrective / yellow)
+        // 3) Rushed Important Sentences (corrective / yellow)
         const rushed = section.rushed_important_sentences;
         if (Array.isArray(rushed)) {
             detailsHtml += `
@@ -1994,7 +2008,7 @@ class App {
             `;
         }
 
-        // 3) Slow Low Priority Sentences (corrective / yellow)
+        // 4) Slow Low Priority Sentences (corrective / yellow)
         const slow = section.slow_low_priority_sentences;
         if (Array.isArray(slow)) {
             detailsHtml += `
@@ -2005,14 +2019,15 @@ class App {
             `;
         }
 
-        // Skip: overall_assessment and handled keys
+        // Skip handled keys
         const hiddenKeys = new Set([
             'criterion', 'verdict',
             'well_paced_sentences', 'rushed_important_sentences',
-            'slow_low_priority_sentences', 'overall_assessment',
+            'slow_low_priority_sentences',
         ]);
         Object.entries(section).forEach(([key, value]) => {
             if (hiddenKeys.has(key)) return;
+            if (key === 'overall_assessment' && hasRenderedPacingAssessment) return;
             if (Array.isArray(value)) {
                 const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
                 detailsHtml += `
@@ -2118,7 +2133,17 @@ class App {
     renderToneProductSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Target Tone Profile → Neutral
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Target Tone Profile → Neutral
         const targetTone = section.target_tone_profile;
         if (Array.isArray(targetTone) && targetTone.length > 0) {
             detailsHtml += `
@@ -2129,7 +2154,7 @@ class App {
             `;
         }
 
-        // 2) Why This Tone → Neutral
+        // 3) Why This Tone → Neutral
         if (section.why_this_tone) {
             detailsHtml += `
                 <div class="criterion-detail semantic-neutral-box">
@@ -2139,7 +2164,7 @@ class App {
             `;
         }
 
-        // 3) Your Actual Tone → Neutral
+        // 4) Your Actual Tone → Neutral
         if (section.your_actual_tone) {
             detailsHtml += `
                 <div class="criterion-detail semantic-neutral-box">
@@ -2149,7 +2174,7 @@ class App {
             `;
         }
 
-        // 4) Alignment Assessment → Negative (evaluation + shortcomings)
+        // 5) Alignment Assessment → Negative (evaluation + shortcomings)
         const alignment = section.alignment_assessment;
         if (Array.isArray(alignment) && alignment.length > 0) {
             detailsHtml += `
@@ -2163,6 +2188,7 @@ class App {
         // Skip: inferred_product_type (removed), recommended_adjustments, and handled keys
         const hiddenKeys = new Set([
             'criterion', 'verdict',
+            'overall_assessment',
             'target_tone_profile', 'why_this_tone', 'your_actual_tone',
             'alignment_assessment', 'inferred_product_type', 'recommended_adjustments',
         ]);

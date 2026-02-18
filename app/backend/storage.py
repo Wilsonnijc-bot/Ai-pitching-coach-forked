@@ -136,7 +136,7 @@ class InMemoryJobStore:
                 summary_json=None,
                 summary_error=None,
                 feedback_round_1=None,
-                feedback_round_1_version="r1_v1",
+                feedback_round_1_version="r1_v2",
                 feedback_round_1_status="pending",
                 feedback_round_1_error=None,
                 feedback_round_2=None,
@@ -144,7 +144,7 @@ class InMemoryJobStore:
                 feedback_round_2_status="pending",
                 feedback_round_2_error=None,
                 feedback_round_3=None,
-                feedback_round_3_version="r3_v1",
+                feedback_round_3_version="r3_v2",
                 feedback_round_3_status="pending",
                 feedback_round_3_error=None,
                 feedback_round_4=None,
@@ -152,7 +152,7 @@ class InMemoryJobStore:
                 feedback_round_4_status="pending",
                 feedback_round_4_error=None,
                 feedback_round_5=None,
-                feedback_round_5_version="r5_v1",
+                feedback_round_5_version="r5_v2",
                 feedback_round_5_status="pending",
                 feedback_round_5_error=None,
                 artifacts_gcs_prefix=None,
@@ -351,7 +351,7 @@ class PostgresJobStore:
                         summary_json JSONB NULL,
                         summary_error TEXT NULL,
                         feedback_round_1 JSONB NULL,
-                        feedback_round_1_version TEXT NOT NULL DEFAULT 'r1_v1',
+                        feedback_round_1_version TEXT NOT NULL DEFAULT 'r1_v2',
                         feedback_round_1_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_1_error TEXT NULL,
                         feedback_round_2 JSONB NULL,
@@ -359,7 +359,7 @@ class PostgresJobStore:
                         feedback_round_2_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_2_error TEXT NULL,
                         feedback_round_3 JSONB NULL,
-                        feedback_round_3_version TEXT NOT NULL DEFAULT 'r3_v1',
+                        feedback_round_3_version TEXT NOT NULL DEFAULT 'r3_v2',
                         feedback_round_3_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_3_error TEXT NULL,
                         feedback_round_4 JSONB NULL,
@@ -367,7 +367,7 @@ class PostgresJobStore:
                         feedback_round_4_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_4_error TEXT NULL,
                         feedback_round_5 JSONB NULL,
-                        feedback_round_5_version TEXT NOT NULL DEFAULT 'r5_v1',
+                        feedback_round_5_version TEXT NOT NULL DEFAULT 'r5_v2',
                         feedback_round_5_status TEXT NOT NULL DEFAULT 'pending',
                         feedback_round_5_error TEXT NULL,
                         artifacts_gcs_prefix TEXT NULL,
@@ -436,7 +436,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     ALTER TABLE transcription_jobs
-                    ALTER COLUMN feedback_round_1_version SET DEFAULT 'r1_v1'
+                    ALTER COLUMN feedback_round_1_version SET DEFAULT 'r1_v2'
                     """
                 )
                 cur.execute(
@@ -448,7 +448,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     UPDATE transcription_jobs
-                    SET feedback_round_1_version = 'r1_v1'
+                    SET feedback_round_1_version = 'r1_v2'
                     WHERE feedback_round_1_version IS NULL
                     """
                 )
@@ -578,7 +578,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     ALTER TABLE transcription_jobs
-                    ALTER COLUMN feedback_round_3_version SET DEFAULT 'r3_v1'
+                    ALTER COLUMN feedback_round_3_version SET DEFAULT 'r3_v2'
                     """
                 )
                 cur.execute(
@@ -590,7 +590,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     UPDATE transcription_jobs
-                    SET feedback_round_3_version = 'r3_v1'
+                    SET feedback_round_3_version = 'r3_v2'
                     WHERE feedback_round_3_version IS NULL
                     """
                 )
@@ -678,7 +678,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     ALTER TABLE transcription_jobs
-                    ALTER COLUMN feedback_round_5_version SET DEFAULT 'r5_v1'
+                    ALTER COLUMN feedback_round_5_version SET DEFAULT 'r5_v2'
                     """
                 )
                 cur.execute(
@@ -690,7 +690,7 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     UPDATE transcription_jobs
-                    SET feedback_round_5_version = 'r5_v1'
+                    SET feedback_round_5_version = 'r5_v2'
                     WHERE feedback_round_5_version IS NULL
                     """
                 )
@@ -784,7 +784,7 @@ class PostgresJobStore:
                         None,
                         None,
                         None,
-                        "r1_v1",
+                        "r1_v2",
                         "pending",
                         None,
                         None,
@@ -792,7 +792,7 @@ class PostgresJobStore:
                         "pending",
                         None,
                         None,
-                        "r3_v1",
+                        "r3_v2",
                         "pending",
                         None,
                         None,
@@ -800,7 +800,7 @@ class PostgresJobStore:
                         "pending",
                         None,
                         None,
-                        "r5_v1",
+                        "r5_v2",
                         "pending",
                         None,
                         None,

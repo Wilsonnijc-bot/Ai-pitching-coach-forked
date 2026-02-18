@@ -659,7 +659,7 @@ def generate_round1_feedback(job_id: str) -> Round1FeedbackResponse:
         job_id,
         feedback_round_1_status="running",
         feedback_round_1_error=None,
-        feedback_round_1_version="r1_v1",
+        feedback_round_1_version="r1_v2",
     )
     _fire_and_forget(run_round1, job_store, job_id)
     return Round1FeedbackResponse(job_id=job_id, status="running")
@@ -721,7 +721,7 @@ def generate_round3_feedback(job_id: str) -> Round3FeedbackResponse:
         job_id,
         feedback_round_3_status="running",
         feedback_round_3_error=None,
-        feedback_round_3_version="r3_v1",
+        feedback_round_3_version="r3_v2",
     )
     _fire_and_forget(run_round3, job_store, job_id)
     return Round3FeedbackResponse(job_id=job_id, status="running")
@@ -783,7 +783,7 @@ def generate_round5_feedback(job_id: str) -> Round5FeedbackResponse:
         job_id,
         feedback_round_5_status="running",
         feedback_round_5_error=None,
-        feedback_round_5_version="r5_v1",
+        feedback_round_5_version="r5_v2",
     )
     _fire_and_forget(run_round5, job_store, job_id)
     return Round5FeedbackResponse(job_id=job_id, status="running")

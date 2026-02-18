@@ -62,6 +62,8 @@ def _validate_round3_schema(payload: dict) -> dict:
 
         # Section-specific validation
         if criterion == "Energy & Presence":
+            if not isinstance(section.get("overall_assessment"), str):
+                raise RuntimeError('"overall_assessment" must be a string for Energy & Presence.')
             if not isinstance(section.get("well_delivered_moments"), list):
                 raise RuntimeError('"well_delivered_moments" must be an array.')
             if not isinstance(section.get("misaligned_moments"), list):
@@ -75,8 +77,8 @@ def _validate_round3_schema(payload: dict) -> dict:
                             raise RuntimeError(f'"sentence_text" in {arr_key} must be a string or null.')
 
         elif criterion == "Pacing & Emphasis":
-            if not isinstance(section.get("overall_assessment"), list):
-                raise RuntimeError('"overall_assessment" must be an array.')
+            if not isinstance(section.get("overall_assessment"), str):
+                raise RuntimeError('"overall_assessment" must be a string for Pacing & Emphasis.')
             if not isinstance(section.get("rushed_important_sentences"), list):
                 raise RuntimeError('"rushed_important_sentences" must be an array.')
             # Validate sentence_text in pacing arrays (string or null)
@@ -88,6 +90,8 @@ def _validate_round3_schema(payload: dict) -> dict:
                             raise RuntimeError(f'"sentence_text" in {arr_key} must be a string or null.')
 
         elif criterion == "Tone-Product Alignment":
+            if not isinstance(section.get("overall_assessment"), str):
+                raise RuntimeError('"overall_assessment" must be a string for Tone-Product Alignment.')
             if not isinstance(section.get("inferred_product_type"), str):
                 raise RuntimeError('"inferred_product_type" must be a string.')
             if not isinstance(section.get("why_this_tone"), str):
