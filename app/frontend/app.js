@@ -114,7 +114,7 @@ class App {
         const mainContent = document.getElementById('main-content');
         mainContent.innerHTML = `
             <div class="page-container">
-                <div class="hero-section">
+                <div class="hero-section hero-panel">
                     <h1 class="hero-title">AI Pitching Coach</h1>
                     <p class="hero-subtitle">Let your idea shine.</p>
                     <p class="hero-description">

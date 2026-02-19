@@ -6,8 +6,24 @@
 }
 
 :root {
-    --primary: #10A37F;
-    --primary-hover: #0D8B6E;
+    /* Fundverse-matching purples (from screenshot) */
+    --purple-cta: #9234EA;
+    --purple-text: #7E22CE;
+    --purple-surface: #EADCF7;
+
+    /* Purple-tinted hero gradient stops */
+    --hero-p1: #9680AA;
+    --hero-p2: #C0B3CB;
+    --hero-p3: #CEC3D8;
+    --hero-p4: #E1DBE6;
+    --hero-p5: #E9E6EB;
+    --hero-p6: #E8E0EF;
+
+    /* Center glow for hero highlight */
+    --hero-glow: #FCFBFC;
+
+    --primary: var(--purple-cta);
+    --primary-hover: #8730D8;
     --secondary-bg: #F7F7F8;
     --sidebar-bg: #FFFFFF;
     --text-primary: #2D333A;
@@ -171,10 +187,22 @@ body {
     justify-content: center;
     min-height: 70vh;
     text-align: center;
-    background: url('https://mgx-backend-cdn.metadl.com/generate/images/960660/2026-02-11/17a33639-2b12-4882-80fd-8a45d867df75.png') center/cover no-repeat;
     border-radius: 12px;
     padding: 60px 40px;
     box-shadow: var(--shadow);
+}
+
+.hero-panel {
+    background:
+        radial-gradient(circle at 50% 50%, var(--hero-glow) 0%, rgba(252, 251, 252, 0) 58%),
+        linear-gradient(135deg,
+            var(--hero-p1) 0%,
+            var(--hero-p2) 30%,
+            var(--hero-p3) 42%,
+            var(--hero-p4) 62%,
+            var(--hero-p5) 78%,
+            var(--hero-p6) 100%
+        );
 }
 
 .hero-title {
@@ -214,14 +242,14 @@ body {
 }
 
 .btn-primary {
-    background-color: var(--primary);
-    color: white;
+    background: var(--purple-cta);
+    color: #FFFFFF;
+    box-shadow: 0 10px 30px rgba(146, 52, 234, 0.25);
 }
 
 .btn-primary:hover {
-    background-color: var(--primary-hover);
+    filter: brightness(0.92);
     transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
 }
 
 .btn-secondary {
@@ -298,7 +326,7 @@ body {
 
 .deck-upload-bar .upload-area:hover,
 .deck-upload-bar .upload-area.drag-over {
-    background: rgba(16, 163, 127, 0.06);
+    background: rgba(146, 52, 234, 0.08);
 }
 
 .upload-bar-label {
@@ -427,7 +455,7 @@ body {
 .upload-area:hover,
 .upload-area.drag-over {
     border-color: var(--primary);
-    background-color: rgba(16, 163, 127, 0.05);
+    background-color: rgba(146, 52, 234, 0.05);
 }
 
 .upload-illustration {
