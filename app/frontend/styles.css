@@ -6,6 +6,9 @@
 }
 
 :root {
+    --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    --font-display: Poppins, Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
+
     /* Fundverse-matching purples (from screenshot) */
     --purple-cta: #9234EA;
     --purple-text: #7E22CE;
@@ -36,7 +39,7 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-ui);
     color: var(--text-primary);
     background-color: var(--secondary-bg);
     line-height: 1.6;
@@ -206,16 +209,57 @@ body {
 }
 
 .hero-title {
-    font-size: 48px;
-    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: 56px;
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: -0.02em;
+    line-height: 1.02;
     color: var(--text-primary);
     margin-bottom: 16px;
 }
 
 .hero-subtitle {
-    font-size: 24px;
-    color: var(--text-secondary);
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 700;
+    font-style: italic;
+    letter-spacing: -0.01em;
+    color: #B8821D;
     margin-bottom: 40px;
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .hero-subtitle {
+        background: linear-gradient(
+            110deg,
+            #B8821D 0%,
+            #F3D980 20%,
+            #FFF5C8 38%,
+            #C8902A 58%,
+            #FFE9A5 78%,
+            #B8821D 100%
+        );
+        background-size: 220% 100%;
+        background-position: 0% 50%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        -webkit-text-fill-color: transparent;
+        animation: hero-subtitle-shine 4.8s ease-in-out infinite;
+    }
+}
+
+@keyframes hero-subtitle-shine {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
 }
 
 .hero-description {
@@ -1492,11 +1536,11 @@ body {
     }
 
     .hero-title {
-        font-size: 36px;
+        font-size: 44px;
     }
 
     .hero-subtitle {
-        font-size: 20px;
+        font-size: 26px;
     }
 
     .hero-description {
@@ -1519,11 +1563,11 @@ body {
 
 @media (max-width: 480px) {
     .hero-title {
-        font-size: 28px;
+        font-size: 34px;
     }
 
     .hero-subtitle {
-        font-size: 18px;
+        font-size: 24px;
     }
 
     .btn {
