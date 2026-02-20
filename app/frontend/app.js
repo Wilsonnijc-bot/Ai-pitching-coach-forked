@@ -2,14 +2,16 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs, uploadCalibrationPhoto } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, startRound5Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs, uploadCalibrationPhoto } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
 const TRANSCRIPTION_POLL_INTERVAL_MS = 1500;
 const SUMMARY_POLL_INTERVAL_MS = 1500;
-const TRANSCRIPTION_TIMEOUT_MS = 3 * 60 * 1000;
-const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000;
+// End-to-end processing can include STT + local tone/body-language analysis.
+// Keep timeout comfortably above typical long recordings.
+const TRANSCRIPTION_TIMEOUT_MS = 12 * 60 * 1000;
+const SUMMARY_TIMEOUT_MS = 12 * 60 * 1000;
 const STAGES = new Set(['idle', 'recording', 'uploading', 'transcribing', 'feedbacking', 'done', 'error']);
 
 class App {
@@ -27,6 +29,12 @@ class App {
         this.round1RequestedForJobId = null;
         this.round2RequestedForJobId = null;
         this.round3RequestedForJobId = null;
+        this.round4RequestedForJobId = null;
+        this.round5RequestedForJobId = null;
+        this.transcriptionProgressPct = 0;
+        this.feedbackProgressPct = 0;
+        this.feedbackPulseTick = 0;
+        this.feedbackActiveRound = null;
 
         this.init();
     }
@@ -79,6 +87,7 @@ class App {
     handleInitialRoute() {
         const hash = window.location.hash.slice(1) || 'home';
         window.location.hash = hash;
+        this.handleRoute();
     }
 
     handleRoute() {
@@ -547,6 +556,10 @@ class App {
             this.setSummaryStatus('', 'info', false);
             this.round1RequestedForJobId = null;
             this.round2RequestedForJobId = null;
+            this.round3RequestedForJobId = null;
+            this.round4RequestedForJobId = null;
+            this.round5RequestedForJobId = null;
+            this.feedbackActiveRound = null;
 
             let jobId;
             try {
@@ -598,12 +611,14 @@ class App {
             this.currentJobId = jobId;
             this.currentJobData = null;
             this.transcriptionData = null;
+            this.transcriptionProgressPct = 0;
             this.updateJobMeta({
                 job_id: jobId,
                 status: 'queued',
                 progress: 0,
             });
             this.setStage('transcribing');
+            this._setTranscriptionProgressStatus({ status: 'queued', progress: 0 });
 
             const finishedJob = await this.pollJob({
                 jobId: jobId,
@@ -614,11 +629,7 @@ class App {
                 onTick: (job) => {
                     this.currentJobData = job;
                     this.updateJobMeta(job);
-                    this.setRecordingStatus(
-                        `Transcribing... ${this.progressLabel(job.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setTranscriptionProgressStatus(job);
                 },
             });
 
@@ -658,7 +669,10 @@ class App {
             this.clearStatusActions();
             this.setStage('transcribing');
             this.setRecordButtonState('busy', true);
-            this.setRecordingStatus('Retrying transcript polling...', 'info', true);
+            this._setTranscriptionProgressStatus({
+                status: this.currentJobData?.status || 'transcribing',
+                progress: this.currentJobData?.progress ?? this.transcriptionProgressPct,
+            });
 
             const finishedJob = await this.pollJob({
                 jobId: this.currentJobId,
@@ -669,11 +683,7 @@ class App {
                 onTick: (job) => {
                     this.currentJobData = job;
                     this.updateJobMeta(job);
-                    this.setRecordingStatus(
-                        `Transcribing... ${this.progressLabel(job.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setTranscriptionProgressStatus(job);
                 },
             });
 
@@ -713,7 +723,8 @@ class App {
         const hasRound2 = this.hasRoundFeedback(job, 2);
         const hasRound3 = this.hasRoundFeedback(job, 3);
         const hasRound4 = this.hasRoundFeedback(job, 4);
-        if (hasRound1 && hasRound2 && hasRound3 && hasRound4) {
+        const hasRound5 = this.hasRoundFeedback(job, 5);
+        if (hasRound1 && hasRound2 && hasRound3 && hasRound4 && hasRound5) {
             this.renderSummary(this.getFeedbackFromJob(job));
             this.setSummaryStatus('All feedback rounds ready.', 'success', false);
             this.setStage('done');
@@ -734,13 +745,17 @@ class App {
 
         this.setStage('feedbacking');
         this.clearSummaryActions();
-        this.setSummaryStatus(
-            isRetry ? 'Retrying professional feedback generation...' : 'Generating Round 1, Round 2, Round 3, and Round 4 feedback...',
-            'info',
-            true
-        );
 
         let latestJob = this.currentJobData;
+        this.feedbackProgressPct = this._completedFeedbackRounds(latestJob) * 20;
+        this.feedbackPulseTick = 0;
+        this.feedbackActiveRound = null;
+        const firstPendingRound = Math.min(5, this._completedFeedbackRounds(latestJob) + 1);
+        this._setFeedbackProgressStatus({
+            round: firstPendingRound,
+            progress: this.feedbackProgressPct,
+        });
+
         const needsRound1 = !this.hasRoundFeedback(latestJob, 1);
 
         if (needsRound1 && (isRetry || this.round1RequestedForJobId !== this.currentJobId)) {
@@ -764,11 +779,7 @@ class App {
                 onTick: (currentJob) => {
                     this.currentJobData = currentJob;
                     this.updateJobMeta(currentJob);
-                    this.setSummaryStatus(
-                        `Generating Round 1 feedback... ${this.progressLabel(currentJob.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setFeedbackProgressStatus({ round: 1, job: currentJob });
                 },
             });
         }
@@ -795,11 +806,7 @@ class App {
                 onTick: (currentJob) => {
                     this.currentJobData = currentJob;
                     this.updateJobMeta(currentJob);
-                    this.setSummaryStatus(
-                        `Generating Round 2 feedback... ${this.progressLabel(currentJob.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setFeedbackProgressStatus({ round: 2, job: currentJob });
                 },
             });
         }
@@ -826,11 +833,7 @@ class App {
                 onTick: (currentJob) => {
                     this.currentJobData = currentJob;
                     this.updateJobMeta(currentJob);
-                    this.setSummaryStatus(
-                        `Generating Round 3 feedback... ${this.progressLabel(currentJob.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setFeedbackProgressStatus({ round: 3, job: currentJob });
                 },
             });
         }
@@ -857,18 +860,41 @@ class App {
                 onTick: (currentJob) => {
                     this.currentJobData = currentJob;
                     this.updateJobMeta(currentJob);
-                    this.setSummaryStatus(
-                        `Generating Round 4 feedback... ${this.progressLabel(currentJob.progress)}`,
-                        'info',
-                        true
-                    );
+                    this._setFeedbackProgressStatus({ round: 4, job: currentJob });
+                },
+            });
+        }
+
+        const needsRound5 = !this.hasRoundFeedback(latestJob, 5);
+        if (needsRound5 && (isRetry || this.round5RequestedForJobId !== this.currentJobId)) {
+            await startRound5Feedback(this.currentJobId);
+            this.round5RequestedForJobId = this.currentJobId;
+        }
+
+        if (needsRound5) {
+            latestJob = await this.pollJob({
+                jobId: this.currentJobId,
+                timeoutMs: SUMMARY_TIMEOUT_MS,
+                intervalMs: SUMMARY_POLL_INTERVAL_MS,
+                phaseName: 'Round 5 feedback',
+                isComplete: (currentJob) => this.hasRoundFeedback(currentJob, 5),
+                isFailed: (currentJob) => {
+                    if (currentJob.feedback_round_5_status === 'failed') {
+                        return currentJob.feedback_round_5_error || 'Round 5 feedback failed.';
+                    }
+                    return null;
+                },
+                onTick: (currentJob) => {
+                    this.currentJobData = currentJob;
+                    this.updateJobMeta(currentJob);
+                    this._setFeedbackProgressStatus({ round: 5, job: currentJob });
                 },
             });
         }
 
         this.currentJobData = latestJob;
         const feedback = this.getFeedbackFromJob(latestJob);
-        if (!feedback || !feedback.round1 || !feedback.round2) {
+        if (!feedback || !feedback.round1 || !feedback.round2 || !feedback.round3 || !feedback.round4 || !feedback.round5) {
             throw new Error('Round feedback payload is incomplete.');
         }
         this.renderSummary(feedback);
@@ -896,7 +922,7 @@ class App {
         const detail = error instanceof Error ? error.message : String(error || 'Unknown error');
         this.setStage('error');
         const partialFeedback = this.getFeedbackFromJob(this.currentJobData);
-        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.round3 || partialFeedback.round4 || partialFeedback.legacy)) {
+        if (partialFeedback && (partialFeedback.round1 || partialFeedback.round2 || partialFeedback.round3 || partialFeedback.round4 || partialFeedback.round5 || partialFeedback.legacy)) {
             this.renderSummary(partialFeedback);
         }
         this.setSummaryStatus(`Feedback generation failed. Retry. ${detail}`, 'error', false);
@@ -916,6 +942,8 @@ class App {
 
     async pollJob({ jobId, timeoutMs, intervalMs, phaseName, isComplete, onTick, isFailed = null }) {
         const startedAt = Date.now();
+        let lastStatus = 'unknown';
+        let lastProgress = null;
 
         while (Date.now() - startedAt < timeoutMs) {
             let job;
@@ -924,6 +952,9 @@ class App {
             } catch (error) {
                 throw new Error(`Network error while polling ${phaseName.toLowerCase()}: ${error.message}`);
             }
+
+            lastStatus = String(job.status || 'unknown');
+            lastProgress = Number.isFinite(job.progress) ? job.progress : null;
 
             if (onTick) {
                 onTick(job);
@@ -948,7 +979,8 @@ class App {
             await this.sleep(intervalMs);
         }
 
-        throw new Error(`${phaseName} polling timed out.`);
+        const progressLabel = lastProgress == null ? 'unknown' : `${lastProgress}%`;
+        throw new Error(`${phaseName} polling timed out (last status: ${lastStatus}, progress: ${progressLabel}).`);
     }
 
     displayTranscription(data) {
@@ -1022,13 +1054,17 @@ class App {
             return;
         }
 
-        if (feedbackPayload.round1 || feedbackPayload.round2 || feedbackPayload.round3 || feedbackPayload.round4) {
+        if (feedbackPayload.round1 || feedbackPayload.round2 || feedbackPayload.round3 || feedbackPayload.round4 || feedbackPayload.round5) {
             const allSections = [];
-            // Round 4 (Body Language & Presence) rendered FIRST
+            // Round 5 (Overview + Pitch Deck Evaluation) rendered FIRST
+            if (feedbackPayload.round5 && Array.isArray(feedbackPayload.round5.sections)) {
+                allSections.push(...feedbackPayload.round5.sections);
+            }
+            // Round 4 (Body Language & Presence) rendered SECOND
             if (feedbackPayload.round4 && Array.isArray(feedbackPayload.round4.sections)) {
                 allSections.push(...feedbackPayload.round4.sections);
             }
-            // Round 3 (Vocal Tone & Energy) rendered SECOND
+            // Round 3 (Vocal Tone & Energy) rendered THIRD
             if (feedbackPayload.round3 && Array.isArray(feedbackPayload.round3.sections)) {
                 allSections.push(...feedbackPayload.round3.sections);
             }
@@ -1039,11 +1075,10 @@ class App {
                 allSections.push(...feedbackPayload.round2.sections);
             }
 
-            const sectionCards = allSections
-                .map(section => this.renderSectionCard(section))
-                .join('');
-
             let statusHtml = '';
+            if (!feedbackPayload.round5) {
+                statusHtml += '<p class="summary-muted">Round 5 (Overview + Deck Evaluation) feedback is not available yet.</p>';
+            }
             if (!feedbackPayload.round4) {
                 statusHtml += '<p class="summary-muted">Round 4 (Body Language) feedback is not available yet.</p>';
             }
@@ -1057,13 +1092,12 @@ class App {
                 statusHtml += '<p class="summary-muted">Round 2 feedback is not available yet.</p>';
             }
 
-            const actionBlocks = [];
-
             const bodyActions = feedbackPayload.round4?.top_3_body_language_actions || [];
+            const improvementCards = [];
             if (bodyActions.length > 0) {
-                actionBlocks.push(`
+                improvementCards.push(`
                     <div class="feedback-action-card action-card-neutral">
-                        <h4 class="subsection-label semantic-label-neutral">Top Body Language Actions</h4>
+                        <h4 class="subsection-label semantic-label-neutral">recommended body language improvements</h4>
                         ${this.renderStringList(bodyActions, 'No body language actions provided')}
                     </div>
                 `);
@@ -1071,24 +1105,32 @@ class App {
 
             const vocalActions = feedbackPayload.round3?.top_3_vocal_actions || [];
             if (vocalActions.length > 0) {
-                actionBlocks.push(`
+                improvementCards.push(`
                     <div class="feedback-action-card action-card-neutral">
-                        <h4 class="subsection-label semantic-label-neutral">Top Vocal Actions</h4>
+                        <h4 class="subsection-label semantic-label-neutral">recommended Vocal improvements</h4>
                         ${this.renderStringList(vocalActions, 'No vocal actions provided')}
                     </div>
                 `);
             }
 
-            const thirtySecond = feedbackPayload.round2?.tightened_30_second_structure
-                || feedbackPayload.round1?.tightened_30_second_structure;
-            if (thirtySecond) {
-                actionBlocks.push(`
-                    <div class="feedback-action-card action-card-neutral">
-                        <h4 class="subsection-label semantic-label-neutral">Tightened 30-Second Structure</h4>
-                        ${this.renderStringList(thirtySecond, 'No structure provided')}
-                    </div>
-                `);
+            const sectionCardsList = [];
+            const improvementCardsHtml = improvementCards.join('');
+            let insertedAfterToneSection = false;
+            allSections.forEach(section => {
+                sectionCardsList.push(this.renderSectionCard(section));
+                if (!insertedAfterToneSection && section && section.criterion === 'Tone-Product Alignment') {
+                    if (improvementCardsHtml) {
+                        sectionCardsList.push(improvementCardsHtml);
+                    }
+                    insertedAfterToneSection = true;
+                }
+            });
+            if (!insertedAfterToneSection && improvementCardsHtml) {
+                sectionCardsList.push(improvementCardsHtml);
             }
+
+            const sectionCards = sectionCardsList.join('');
+            const actionBlocks = [];
 
             const actions1 = feedbackPayload.round1?.top_3_actions_for_next_pitch || [];
             const actions2 = feedbackPayload.round2?.top_3_actions_for_next_pitch || [];
@@ -1111,6 +1153,7 @@ class App {
                     ${actionBlocks.join('')}
                 </div>
             `;
+            this.initCollapsibleSections();
             return;
         }
 
@@ -1175,6 +1218,70 @@ class App {
         `;
     }
 
+    initCollapsibleSections() {
+        const summaryCard = document.getElementById('summary-card');
+        if (!summaryCard) {
+            return;
+        }
+
+        const sectionCards = summaryCard.querySelectorAll('.section-card');
+        sectionCards.forEach(card => {
+            const titleEl = card.querySelector('.section-card-title');
+            const body = card.querySelector('.section-card-body');
+            if (!titleEl || !body) {
+                return;
+            }
+
+            const title = String(titleEl.textContent || '').trim().toLowerCase();
+            if (title === 'overview') {
+                return;
+            }
+
+            if (body.querySelector('.section-see-more-btn')) {
+                return;
+            }
+
+            const detailBlocks = Array.from(body.children)
+                .filter(node => node instanceof HTMLElement && node.classList.contains('criterion-detail'));
+            if (detailBlocks.length <= 1) {
+                return;
+            }
+
+            const [previewBlock, ...remainingBlocks] = detailBlocks;
+            const collapsibleContent = document.createElement('div');
+            collapsibleContent.className = 'section-collapsible-content';
+            collapsibleContent.style.display = 'none';
+
+            remainingBlocks.forEach(block => {
+                collapsibleContent.appendChild(block);
+            });
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'section-see-more-btn';
+            toggleBtn.setAttribute('aria-expanded', 'false');
+            toggleBtn.innerHTML = 'See more <span class="see-more-arrow">&raquo;</span>';
+
+            toggleBtn.addEventListener('click', () => {
+                const isExpanded = toggleBtn.classList.toggle('expanded');
+                toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+
+                if (isExpanded) {
+                    collapsibleContent.style.display = 'block';
+                    collapsibleContent.classList.add('is-open');
+                    toggleBtn.innerHTML = 'See less <span class="see-more-arrow">&laquo;</span>';
+                } else {
+                    collapsibleContent.classList.remove('is-open');
+                    collapsibleContent.style.display = 'none';
+                    toggleBtn.innerHTML = 'See more <span class="see-more-arrow">&raquo;</span>';
+                }
+            });
+
+            previewBlock.insertAdjacentElement('afterend', toggleBtn);
+            toggleBtn.insertAdjacentElement('afterend', collapsibleContent);
+        });
+    }
+
     renderSectionCard(section) {
         if (!section || typeof section !== 'object') {
             return '';
@@ -1184,6 +1291,16 @@ class App {
         const verdictRaw = String(section.verdict || 'mixed').toLowerCase();
         const verdictLabel = verdictRaw.toUpperCase();
         const verdictClass = ['weak', 'strong'].includes(verdictRaw) ? verdictRaw : 'mixed';
+
+        // Custom rendering for Overview section (Round 5)
+        if (section.criterion === 'Overview') {
+            return this.renderOverviewSection(section, criterion, verdictLabel, verdictClass);
+        }
+
+        // Custom rendering for Pitch Deck Evaluation section (Round 5)
+        if (section.criterion === 'Pitch Deck Evaluation') {
+            return this.renderDeckEvaluationSection(section, criterion, verdictLabel, verdictClass);
+        }
 
         // Custom rendering for Posture & Stillness section
         if (section.criterion === 'Posture & Stillness') {
@@ -1254,6 +1371,208 @@ class App {
             }
 
             if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderOverviewSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        if (section.overall_evaluation) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-neutral-box">
+                    <h4 class="subsection-label semantic-label-neutral">Overall Evaluation</h4>
+                    <p>${this.escapeHtml(String(section.overall_evaluation))}</p>
+                </div>
+            `;
+        }
+
+        if (Array.isArray(section.key_strengths)) {
+            detailsHtml += `
+                <div class="criterion-detail strategic-evidence-box">
+                    <h4 class="subsection-label strategic-label-evidence">Key Strengths</h4>
+                    ${this.renderStringList(section.key_strengths, 'No strengths provided')}
+                </div>
+            `;
+        }
+
+        if (Array.isArray(section.areas_of_improvement)) {
+            detailsHtml += `
+                <div class="criterion-detail strategic-missing-box">
+                    <h4 class="subsection-label strategic-label-missing">Areas Of Improvement</h4>
+                    ${this.renderStringList(section.areas_of_improvement, 'No improvement areas provided')}
+                </div>
+            `;
+        }
+
+        const handledKeys = new Set([
+            'criterion',
+            'verdict',
+            'overall_evaluation',
+            'key_strengths',
+            'areas_of_improvement',
+        ]);
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${this.renderMetricSummary(value)}
+                    </div>
+                `;
+            }
+        });
+
+        return `
+            <div class="section-card">
+                <div class="section-card-header">
+                    <h3 class="section-card-title">${criterion}</h3>
+                    <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                </div>
+                <div class="section-card-body">
+                    ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                </div>
+            </div>
+        `;
+    }
+
+    renderDeckEvaluationSection(section, criterion, verdictLabel, verdictClass) {
+        let detailsHtml = '';
+
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail semantic-neutral-box">
+                    <h4 class="subsection-label semantic-label-neutral">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        const lackingContent = section.lacking_content;
+        if (Array.isArray(lackingContent)) {
+            const cards = lackingContent.length === 0
+                ? '<p class="summary-muted">No lacking content identified.</p>'
+                : lackingContent.map(item => {
+                    if (!item || typeof item !== 'object') {
+                        return `<div class="obj-item"><div class="obj-row"><span class="obj-val">${this.escapeHtml(String(item || ''))}</span></div></div>`;
+                    }
+                    return `
+                        <div class="obj-item moment-card-corrective">
+                            <div class="obj-row"><span class="obj-key">What:</span> <span class="obj-val">${this.escapeHtml(String(item.what || ''))}</span></div>
+                            <div class="obj-row"><span class="obj-key">Why:</span> <span class="obj-val">${this.escapeHtml(String(item.why || ''))}</span></div>
+                        </div>
+                    `;
+                }).join('');
+
+            detailsHtml += `
+                <div class="criterion-detail strategic-missing-box">
+                    <h4 class="subsection-label strategic-label-missing">Lacking Content</h4>
+                    ${cards}
+                </div>
+            `;
+        }
+
+        const structuralFlowIssues = section.structural_flow_issues;
+        if (Array.isArray(structuralFlowIssues)) {
+            const cards = structuralFlowIssues.length === 0
+                ? '<p class="summary-muted">No structural flow issues identified.</p>'
+                : structuralFlowIssues.map(item => {
+                    if (!item || typeof item !== 'object') {
+                        return `<div class="obj-item"><div class="obj-row"><span class="obj-val">${this.escapeHtml(String(item || ''))}</span></div></div>`;
+                    }
+                    return `
+                        <div class="obj-item moment-card-corrective">
+                            <div class="obj-row"><span class="obj-key">Issue:</span> <span class="obj-val">${this.escapeHtml(String(item.issue || ''))}</span></div>
+                            <div class="obj-row"><span class="obj-key">Impact:</span> <span class="obj-val">${this.escapeHtml(String(item.impact || ''))}</span></div>
+                        </div>
+                    `;
+                }).join('');
+
+            detailsHtml += `
+                <div class="criterion-detail strategic-missing-box">
+                    <h4 class="subsection-label strategic-label-missing">Structural Flow Issues</h4>
+                    ${cards}
+                </div>
+            `;
+        }
+
+        if (Array.isArray(section.recommended_refinements)) {
+            const refinements = section.recommended_refinements;
+            detailsHtml += `
+                <div class="criterion-detail strategic-rewrite-box">
+                    <h4 class="subsection-label strategic-label-rewrite">Recommended Refinements</h4>
+                    ${refinements.length === 0
+                        ? '<p class="summary-muted">No refinements provided.</p>'
+                        : `
+                            <ol class="summary-list">
+                                ${refinements.map(item => `<li>${this.escapeHtml(String(item || ''))}</li>`).join('')}
+                            </ol>
+                        `
+                    }
+                </div>
+            `;
+        }
+
+        const handledKeys = new Set([
+            'criterion',
+            'verdict',
+            'overall_assessment',
+            'lacking_content',
+            'structural_flow_issues',
+            'recommended_refinements',
+        ]);
+        Object.entries(section).forEach(([key, value]) => {
+            if (handledKeys.has(key)) return;
+            if (Array.isArray(value)) {
+                const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        ${hasObjects ? this.renderObjectList(value) : this.renderStringList(value, 'None')}
+                    </div>
+                `;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+                detailsHtml += `
+                    <div class="criterion-detail">
+                        <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
+                        <p>${this.escapeHtml(String(value))}</p>
+                    </div>
+                `;
+            } else if (value && typeof value === 'object') {
                 detailsHtml += `
                     <div class="criterion-detail">
                         <h4 class="subsection-label">${this.escapeHtml(this.humanizeKey(key))}</h4>
@@ -1561,7 +1880,17 @@ class App {
     renderEnergyPresenceSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Well Delivered Moments (positive / green) — first
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Well Delivered Moments (positive / green)
         const wellDelivered = section.well_delivered_moments;
         if (Array.isArray(wellDelivered)) {
             detailsHtml += `
@@ -1572,7 +1901,7 @@ class App {
             `;
         }
 
-        // 2) Misaligned Moments (corrective / yellow)
+        // 3) Misaligned Moments (corrective / yellow)
         const misaligned = section.misaligned_moments;
         if (Array.isArray(misaligned)) {
             detailsHtml += `
@@ -1586,6 +1915,7 @@ class App {
         // Remaining keys — but explicitly skip removed metrics
         const hiddenKeys = new Set([
             'criterion', 'verdict',
+            'overall_assessment',
             'well_delivered_moments', 'misaligned_moments',
             'energy_timeline_summary', 'avg_f0_hz', 'avg_rms_db',
             'pitch_range_hz', 'energy_range_db',
@@ -1633,7 +1963,30 @@ class App {
     renderPacingEmphasisSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Well Paced Sentences (positive / green) — first
+        // 1) Overall Assessment (first)
+        const pacingAssessment = section.overall_assessment;
+        if (typeof pacingAssessment === 'string' && pacingAssessment.trim()) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(pacingAssessment)}</p>
+                </div>
+            `;
+        } else if (Array.isArray(pacingAssessment) && pacingAssessment.length > 0) {
+            // Backward compatibility for older v1 payloads.
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(pacingAssessment.map(v => String(v || '')).join(' '))}</p>
+                </div>
+            `;
+        }
+        const hasRenderedPacingAssessment = Boolean(
+            (typeof pacingAssessment === 'string' && pacingAssessment.trim()) ||
+            (Array.isArray(pacingAssessment) && pacingAssessment.length > 0)
+        );
+
+        // 2) Well Paced Sentences (positive / green)
         const wellPaced = section.well_paced_sentences;
         if (Array.isArray(wellPaced)) {
             detailsHtml += `
@@ -1644,7 +1997,7 @@ class App {
             `;
         }
 
-        // 2) Rushed Important Sentences (corrective / yellow)
+        // 3) Rushed Important Sentences (corrective / yellow)
         const rushed = section.rushed_important_sentences;
         if (Array.isArray(rushed)) {
             detailsHtml += `
@@ -1655,7 +2008,7 @@ class App {
             `;
         }
 
-        // 3) Slow Low Priority Sentences (corrective / yellow)
+        // 4) Slow Low Priority Sentences (corrective / yellow)
         const slow = section.slow_low_priority_sentences;
         if (Array.isArray(slow)) {
             detailsHtml += `
@@ -1666,14 +2019,15 @@ class App {
             `;
         }
 
-        // Skip: overall_assessment and handled keys
+        // Skip handled keys
         const hiddenKeys = new Set([
             'criterion', 'verdict',
             'well_paced_sentences', 'rushed_important_sentences',
-            'slow_low_priority_sentences', 'overall_assessment',
+            'slow_low_priority_sentences',
         ]);
         Object.entries(section).forEach(([key, value]) => {
             if (hiddenKeys.has(key)) return;
+            if (key === 'overall_assessment' && hasRenderedPacingAssessment) return;
             if (Array.isArray(value)) {
                 const hasObjects = value.length > 0 && typeof value[0] === 'object' && value[0] !== null;
                 detailsHtml += `
@@ -1779,7 +2133,17 @@ class App {
     renderToneProductSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
 
-        // 1) Target Tone Profile → Neutral
+        // 1) Overall Assessment (first)
+        if (section.overall_assessment) {
+            detailsHtml += `
+                <div class="criterion-detail">
+                    <h4 class="subsection-label">Overall Assessment</h4>
+                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                </div>
+            `;
+        }
+
+        // 2) Target Tone Profile → Neutral
         const targetTone = section.target_tone_profile;
         if (Array.isArray(targetTone) && targetTone.length > 0) {
             detailsHtml += `
@@ -1790,7 +2154,7 @@ class App {
             `;
         }
 
-        // 2) Why This Tone → Neutral
+        // 3) Why This Tone → Neutral
         if (section.why_this_tone) {
             detailsHtml += `
                 <div class="criterion-detail semantic-neutral-box">
@@ -1800,7 +2164,7 @@ class App {
             `;
         }
 
-        // 3) Your Actual Tone → Neutral
+        // 4) Your Actual Tone → Neutral
         if (section.your_actual_tone) {
             detailsHtml += `
                 <div class="criterion-detail semantic-neutral-box">
@@ -1810,7 +2174,7 @@ class App {
             `;
         }
 
-        // 4) Alignment Assessment → Negative (evaluation + shortcomings)
+        // 5) Alignment Assessment → Negative (evaluation + shortcomings)
         const alignment = section.alignment_assessment;
         if (Array.isArray(alignment) && alignment.length > 0) {
             detailsHtml += `
@@ -1824,6 +2188,7 @@ class App {
         // Skip: inferred_product_type (removed), recommended_adjustments, and handled keys
         const hiddenKeys = new Set([
             'criterion', 'verdict',
+            'overall_assessment',
             'target_tone_profile', 'why_this_tone', 'your_actual_tone',
             'alignment_assessment', 'inferred_product_type', 'recommended_adjustments',
         ]);
@@ -2046,8 +2411,8 @@ class App {
      *   1. Neutral framing summaries (Diagnosis, Credible Market Framing)
      *   2. Evidence Quotes            → GREEN
      *   3. Missing Information / Vague → YELLOW
-     *   4. Recommended Rewrites        → BLUE
-     *   5. What Investors Will Question → YELLOW
+     *   4. What Investors Will Question → YELLOW
+     *   5. Recommended Rewrites        → BLUE (always last)
      *
      * Color semantics are SEPARATE from the performance green/yellow
      * used by Posture & Eye-Contact (Stable vs Unstable).
@@ -2104,14 +2469,14 @@ class App {
             renderSub(key, 'strategic-missing-box', 'strategic-label-missing');
         }
 
-        // ── 4) Recommended Rewrites → BLUE ──
-        for (const key of ['recommended_rewrites', 'recommended_lines']) {
-            renderSub(key, 'strategic-rewrite-box', 'strategic-label-rewrite');
-        }
-
-        // ── 5) What Investors Will Question → YELLOW ──
+        // ── 4) What Investors Will Question → YELLOW ──
         for (const key of ['what_investors_will_question', 'what_investors_need_to_hear']) {
             renderSub(key, 'strategic-missing-box', 'strategic-label-missing');
+        }
+
+        // ── 5) Recommended Rewrites → BLUE (last) ──
+        for (const key of ['recommended_rewrites', 'recommended_lines']) {
+            renderSub(key, 'strategic-rewrite-box', 'strategic-label-rewrite');
         }
 
         // ── 6) Catch-all for any remaining unlisted fields ──
@@ -2256,14 +2621,15 @@ class App {
         }
 
         if (!job) {
-            jobMeta.textContent = 'No active job.';
+            jobMeta.textContent = 'No active session.';
             return;
         }
 
-        const jobId = job.job_id || this.currentJobId || 'N/A';
-        const status = job.status || 'unknown';
+        const status = String(job.status || 'unknown')
+            .replaceAll('_', ' ')
+            .replace(/\b\w/g, (m) => m.toUpperCase());
         const progress = typeof job.progress === 'number' ? `${job.progress}%` : 'N/A';
-        jobMeta.textContent = `Job: ${jobId} | Status: ${status} | Progress: ${progress}`;
+        jobMeta.textContent = `Session status: ${status} (${progress})`;
     }
 
     setStage(nextStage) {
@@ -2278,7 +2644,9 @@ class App {
         const inputBlocks = document.getElementById('input-blocks');
         const resultsPanel = document.getElementById('results-panel');
         const newPracticeBtn = document.getElementById('new-practice-btn');
+        const jobMeta = document.getElementById('job-meta');
         const hasTranscript = !!this.transcriptionData;
+        const isActiveProcessing = ['uploading', 'transcribing', 'feedbacking'].includes(this.stage);
 
         if (inputBlocks) {
             inputBlocks.classList.toggle('hidden', hasTranscript);
@@ -2291,6 +2659,10 @@ class App {
 
         if (newPracticeBtn) {
             newPracticeBtn.style.display = hasTranscript ? 'inline-flex' : 'none';
+        }
+
+        if (jobMeta) {
+            jobMeta.classList.toggle('hidden', isActiveProcessing);
         }
     }
 
@@ -2319,17 +2691,138 @@ class App {
         recordText.textContent = 'Start recording';
     }
 
-    setRecordingStatus(message, type, loading) {
+    _clampPercent(value, fallback = 0) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) {
+            return Math.max(0, Math.min(100, numeric));
+        }
+        return Math.max(0, Math.min(100, Number(fallback) || 0));
+    }
+
+    _transcriptionStageLabel(status) {
+        const labels = {
+            queued: 'Queued',
+            deck_processing: 'Preparing deck',
+            transcribing: 'Preparing audio',
+            uploading_audio_to_gcs: 'Uploading audio',
+            stt_batch_recognize: 'Submitting speech job',
+            waiting_for_stt: 'Recognizing speech',
+            parsing_results: 'Parsing results',
+            computing_metrics: 'Computing metrics',
+            writing_artifacts: 'Writing artifacts',
+            done: 'Completed',
+        };
+        return labels[status] || 'Processing';
+    }
+
+    _transcriptionStageSubtitle(status) {
+        const subtitles = {
+            queued: 'Your pitch is queued and will start in a moment.',
+            deck_processing: 'Extracting deck context for richer analysis.',
+            transcribing: 'Converting recording for speech recognition.',
+            uploading_audio_to_gcs: 'Uploading audio to secure processing.',
+            stt_batch_recognize: 'Submitting transcription workload.',
+            waiting_for_stt: 'Speech model is decoding your recording.',
+            parsing_results: 'Parsing transcript, segments, and word timings.',
+            computing_metrics: 'Building tone and body-language metrics.',
+            writing_artifacts: 'Saving transcript artifacts and metadata.',
+            done: 'Transcription is complete.',
+        };
+        return subtitles[status] || 'Processing your recording.';
+    }
+
+    _setTranscriptionProgressStatus(job) {
+        const status = String(job?.status || 'transcribing');
+        const pct = this._clampPercent(job?.progress, this.transcriptionProgressPct);
+        this.transcriptionProgressPct = pct;
+        const label = `${Math.round(pct)}% ${this._transcriptionStageLabel(status)}`;
+        this.setRecordingStatus(label, 'info', true, {
+            progress: {
+                title: 'Transcription in Progress',
+                subtitle: this._transcriptionStageSubtitle(status),
+                percent: pct,
+                label,
+            },
+        });
+    }
+
+    _completedFeedbackRounds(job) {
+        if (!job || typeof job !== 'object') {
+            return 0;
+        }
+        let done = 0;
+        if (this.hasRoundFeedback(job, 1)) done += 1;
+        if (this.hasRoundFeedback(job, 2)) done += 1;
+        if (this.hasRoundFeedback(job, 3)) done += 1;
+        if (this.hasRoundFeedback(job, 4)) done += 1;
+        if (this.hasRoundFeedback(job, 5)) done += 1;
+        return done;
+    }
+
+    _roundSubtitle(round) {
+        const map = {
+            1: 'Round 1: Product Fundamentals',
+            2: 'Round 2: Delivery & Business',
+            3: 'Round 3: Vocal Tone & Energy',
+            4: 'Round 4: Body Language & Presence',
+            5: 'Round 5: Overview & Deck Evaluation',
+        };
+        return map[round] || 'Generating feedback';
+    }
+
+    _setFeedbackProgressStatus({ round, job = null, label = '', progress = null }) {
+        const safeRound = Math.max(1, Math.min(5, Number(round) || 1));
+        const segmentSize = 20;
+        const segmentStart = (safeRound - 1) * segmentSize;
+        const segmentEnd = safeRound * segmentSize;
+        if (this.feedbackActiveRound !== safeRound) {
+            this.feedbackActiveRound = safeRound;
+            this.feedbackPulseTick = 0;
+            this.feedbackProgressPct = Math.max(this.feedbackProgressPct, segmentStart);
+        }
+
+        if (typeof progress === 'number') {
+            this.feedbackProgressPct = this._clampPercent(progress, this.feedbackProgressPct);
+        } else if (job) {
+            if (this.hasRoundFeedback(job, safeRound)) {
+                this.feedbackProgressPct = Math.max(this.feedbackProgressPct, segmentEnd);
+            } else {
+                this.feedbackPulseTick += 1;
+                const pulseWithinSegment = Math.min(this.feedbackPulseTick * 2.2, segmentSize - 2);
+                const animated = segmentStart + pulseWithinSegment;
+                const cap = segmentEnd - 2;
+                this.feedbackProgressPct = Math.max(
+                    this.feedbackProgressPct,
+                    this._clampPercent(Math.min(animated, cap), segmentStart),
+                );
+            }
+        } else {
+            this.feedbackProgressPct = Math.max(this.feedbackProgressPct, segmentStart);
+        }
+
+        const pct = this._clampPercent(this.feedbackProgressPct, segmentStart);
+        const progressText = label || `${Math.round(pct)}% Processing round ${safeRound}`;
+        this.setSummaryStatus(progressText, 'info', true, {
+            progress: {
+                title: 'Feedback Generation',
+                subtitle: this._roundSubtitle(safeRound),
+                percent: pct,
+                label: progressText,
+            },
+        });
+    }
+
+    setRecordingStatus(message, type, loading, options = null) {
         const status = document.getElementById('recording-status');
-        this.setStatusElement(status, message, type, loading);
+        this.setStatusElement(status, message, type, loading, options);
     }
 
-    setSummaryStatus(message, type, loading) {
+    setSummaryStatus(message, type, loading, options = null) {
         const status = document.getElementById('summary-status');
-        this.setStatusElement(status, message, type, loading);
+        this.setStatusElement(status, message, type, loading, options);
     }
 
-    setStatusElement(element, message, type, loading) {
+    setStatusElement(element, message, type, loading, options = null) {
         if (!element) {
             return;
         }
@@ -2342,6 +2835,28 @@ class App {
         }
 
         const safeType = ['success', 'error', 'info', 'warning'].includes(type) ? type : 'info';
+        const progressData = options && typeof options === 'object' ? options.progress : null;
+
+        if (progressData && typeof progressData.percent === 'number') {
+            const percent = Math.round(this._clampPercent(progressData.percent));
+            const title = this.escapeHtml(progressData.title || 'In Progress');
+            const subtitle = this.escapeHtml(progressData.subtitle || text);
+            const label = this.escapeHtml(progressData.label || `${percent}%`);
+
+            element.className = `status-message active ${safeType} progress`;
+            element.innerHTML = `
+                <div class="status-progress-head">
+                    <p class="status-progress-title">${title}</p>
+                    <p class="status-progress-subtitle">${subtitle}</p>
+                </div>
+                <div class="status-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+                    <div class="status-progress-fill" style="width: ${percent}%"></div>
+                    <span class="status-progress-text">${label}</span>
+                </div>
+            `;
+            return;
+        }
+
         element.textContent = text;
         element.className = `status-message active ${safeType}${loading ? ' loading' : ''}`;
     }
@@ -2436,6 +2951,13 @@ class App {
         this.transcriptionData = null;
         this.round1RequestedForJobId = null;
         this.round2RequestedForJobId = null;
+        this.round3RequestedForJobId = null;
+        this.round4RequestedForJobId = null;
+        this.round5RequestedForJobId = null;
+        this.transcriptionProgressPct = 0;
+        this.feedbackProgressPct = 0;
+        this.feedbackPulseTick = 0;
+        this.feedbackActiveRound = null;
         this.setStage('idle');
         this.updateJobMeta(null);
         this.setRecordingStatus('', 'info', false);
@@ -2489,7 +3011,7 @@ class App {
         if (!job || typeof job !== 'object') {
             return false;
         }
-        const keyMap = { 1: 'feedback_round_1', 2: 'feedback_round_2', 3: 'feedback_round_3', 4: 'feedback_round_4' };
+        const keyMap = { 1: 'feedback_round_1', 2: 'feedback_round_2', 3: 'feedback_round_3', 4: 'feedback_round_4', 5: 'feedback_round_5' };
         const key = keyMap[roundNumber];
         if (!key) return false;
         const payload = job[key];
@@ -2505,15 +3027,16 @@ class App {
         const round2 = this.hasRoundFeedback(job, 2) ? job.feedback_round_2 : null;
         const round3 = this.hasRoundFeedback(job, 3) ? job.feedback_round_3 : null;
         const round4 = this.hasRoundFeedback(job, 4) ? job.feedback_round_4 : null;
-        if (round1 || round2 || round3 || round4) {
-            return { round1, round2, round3, round4, legacy: null };
+        const round5 = this.hasRoundFeedback(job, 5) ? job.feedback_round_5 : null;
+        if (round1 || round2 || round3 || round4 || round5) {
+            return { round1, round2, round3, round4, round5, legacy: null };
         }
 
         const legacy = job.feedback || job.summary;
         if (!legacy || typeof legacy !== 'object') {
-            return { round1: null, round2: null, round3: null, round4: null, legacy: null };
+            return { round1: null, round2: null, round3: null, round4: null, round5: null, legacy: null };
         }
-        return { round1: null, round2: null, round3: null, round4: null, legacy };
+        return { round1: null, round2: null, round3: null, round4: null, round5: null, legacy };
     }
 
     progressLabel(progress) {
