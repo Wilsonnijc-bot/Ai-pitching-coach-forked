@@ -244,6 +244,27 @@ export async function startRound4Feedback(jobId) {
 }
 
 /**
+ * Start Round 5 (Overview + Pitch Deck Evaluation) feedback generation for an existing job.
+ * @param {string} jobId
+ * @returns {Promise<{job_id:string,status:string}>}
+ */
+export async function startRound5Feedback(jobId) {
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/feedback/round5`, {
+        method: 'POST',
+    });
+
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to start round 5 feedback (${response.status})`
+        );
+        throw new Error(detail);
+    }
+
+    return response.json();
+}
+
+/**
  * Prepare a job: creates a job shell on the server so video can be uploaded
  * separately via the streaming endpoint.
  * @returns {Promise<{job_id:string, status:string}>}
