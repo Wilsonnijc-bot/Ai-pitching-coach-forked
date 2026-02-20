@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -309,6 +309,9 @@ def process_transcription_job(
         derived_metrics = compute_derived_metrics(transcript_words)
         has_diarization = bool(stt_payload.get("has_diarization", False))
 
+        # Parsing is complete at this point; now we run local signal/video metrics.
+        job_store.update_job(job_id, status="computing_metrics", progress=85, error=None)
+
         # --- Compute tone + body-language metrics in parallel ---
         def _compute_tone_metrics() -> dict:
             result = {}
@@ -364,7 +367,7 @@ def process_transcription_job(
         except Exception:
             logger.warning("job_id=%s video_future_timeout_or_error", job_id, exc_info=True)
 
-        job_store.update_job(job_id, progress=90)
+        job_store.update_job(job_id, status="writing_artifacts", progress=90, error=None)
         try:
             artifacts_gcs_prefix, artifact_has_diarization = write_transcript_artifacts(
                 job_id=job_id,

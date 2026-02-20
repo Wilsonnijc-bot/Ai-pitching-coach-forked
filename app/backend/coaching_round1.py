@@ -185,6 +185,7 @@ def _validate_round1_schema(payload: dict) -> dict:
         for key in (
             "criterion",
             "verdict",
+            "diagnosis",
             "evidence_quotes",
             "what_investors_will_question",
             "missing_information",
@@ -199,6 +200,8 @@ def _validate_round1_schema(payload: dict) -> dict:
             raise RuntimeError(f'Unexpected round 1 criterion "{criterion}".')
         if verdict not in {"strong", "mixed", "weak"}:
             raise RuntimeError(f'Invalid verdict "{verdict}" in section "{criterion}".')
+        if not isinstance(section.get("diagnosis"), str):
+            raise RuntimeError(f'"diagnosis" must be a string in section "{criterion}".')
         seen_criteria.add(criterion)
 
         for list_field in (

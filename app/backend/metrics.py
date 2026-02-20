@@ -147,11 +147,67 @@ def compute_energy_timeline(
         hop_length = sr  # 1 second per frame
         rms = librosa.feature.rms(y=y, frame_length=sr, hop_length=hop_length, center=True)[0]
 
-        # --- Per-second F0 via pyin ---
-        f0, voiced_flag, _ = librosa.pyin(
-            y, fmin=60, fmax=500, sr=sr,
-            frame_length=2048, hop_length=sr,
-        )
+        # --- Per-second F0 ---
+        #
+        # NOTE:
+        # Using pyin with 1-second hop on some recordings triggers:
+        # "ParameterError: Target size (...) must be at least input size (...)"
+        # in librosa's sequence.transition_local path. To keep this robust in
+        # production, we estimate pitch at a smaller hop and aggregate to
+        # per-second median F0. If pyin fails, we fall back to yin.
+        pitch_hop = max(256, sr // 50)  # ~20 ms at 16kHz
+        f0_hz_by_sec: list[Optional[float]] = [None] * total_seconds
+
+        def _aggregate_pitch_to_seconds(f0_series, frame_times) -> list[Optional[float]]:
+            buckets: list[list[float]] = [[] for _ in range(total_seconds)]
+            for hz, t in zip(f0_series, frame_times):
+                if hz is None:
+                    continue
+                hz_val = float(hz)
+                if not np.isfinite(hz_val) or hz_val <= 0:
+                    continue
+                sec_idx = int(float(t))
+                if 0 <= sec_idx < total_seconds:
+                    buckets[sec_idx].append(hz_val)
+            return [
+                round(float(np.median(bucket)), 1) if bucket else None
+                for bucket in buckets
+            ]
+
+        try:
+            f0_pyin, _, _ = librosa.pyin(
+                y,
+                fmin=60,
+                fmax=500,
+                sr=sr,
+                frame_length=2048,
+                hop_length=pitch_hop,
+            )
+            frame_times = librosa.frames_to_time(
+                np.arange(len(f0_pyin)),
+                sr=sr,
+                hop_length=pitch_hop,
+            )
+            f0_hz_by_sec = _aggregate_pitch_to_seconds(f0_pyin, frame_times)
+        except Exception:
+            logger.warning("pyin pitch extraction failed; falling back to yin", exc_info=True)
+            try:
+                f0_yin = librosa.yin(
+                    y,
+                    fmin=60,
+                    fmax=500,
+                    sr=sr,
+                    frame_length=2048,
+                    hop_length=pitch_hop,
+                )
+                frame_times = librosa.frames_to_time(
+                    np.arange(len(f0_yin)),
+                    sr=sr,
+                    hop_length=pitch_hop,
+                )
+                f0_hz_by_sec = _aggregate_pitch_to_seconds(f0_yin, frame_times)
+            except Exception:
+                logger.warning("yin pitch extraction failed", exc_info=True)
 
         # --- Map words into 1-second bins ---
         sorted_words = sorted(words, key=lambda w: _to_float(w.get("start"), 0.0))
@@ -171,8 +227,7 @@ def compute_energy_timeline(
             text = " ".join(bins.get(sec_idx, [])) or "(pause)"
             rms_val = float(rms[sec_idx]) if sec_idx < len(rms) else 0.0
             rms_db = round(20 * math.log10(max(rms_val, 1e-10)), 1)
-            f0_val = float(f0[sec_idx]) if sec_idx < len(f0) and not np.isnan(f0[sec_idx]) else None
-            f0_hz = round(f0_val, 1) if f0_val is not None else None
+            f0_hz = f0_hz_by_sec[sec_idx] if sec_idx < len(f0_hz_by_sec) else None
             timeline.append({
                 "sec": sec_idx,
                 "text": text,
