@@ -37,6 +37,8 @@ class App {
         this.feedbackPulseTick = 0;
         this.feedbackActiveRound = null;
         this.noDeckNoticeAcknowledged = false;
+        this.noDeckModalPromise = null;
+        this.noDeckModalResolver = null;
 
         this.init();
     }
@@ -207,14 +209,16 @@ class App {
                             <div class="timer" id="timer">00:00</div>
                         </div>
 
-                        <div class="no-deck-notice" id="no-deck-notice" role="alert" aria-live="polite">
-                            <div class="no-deck-notice-copy">
-                                <p class="no-deck-notice-title">Deck upload is optional</p>
-                                <p class="no-deck-notice-text">
+                        <div class="no-deck-modal-backdrop" id="no-deck-modal" role="dialog" aria-modal="true" aria-labelledby="no-deck-modal-title" aria-describedby="no-deck-modal-text">
+                            <div class="no-deck-modal-card">
+                                <h3 class="no-deck-modal-title" id="no-deck-modal-title">Deck upload is optional</h3>
+                                <p class="no-deck-modal-text" id="no-deck-modal-text">
                                     You can continue without a deck. If none is uploaded, slide feedback will say: "There is no slide uploaded".
                                 </p>
+                                <div class="no-deck-modal-actions">
+                                    <button type="button" class="btn btn-primary no-deck-modal-ok" id="no-deck-modal-ok">OK</button>
+                                </div>
                             </div>
-                            <button type="button" class="btn btn-primary btn-small no-deck-notice-ok" id="no-deck-notice-ok">OK</button>
                         </div>
 
                         <p class="job-meta" id="job-meta">No active job.</p>
@@ -295,7 +299,7 @@ class App {
         this.deckUploader = new DeckUploader('deck-upload-card', {
             onFileChange: (hasDeck) => this._onDeckChanged(hasDeck),
         });
-        this._wireNoDeckNoticeActions();
+        this._wireNoDeckModalActions();
         this.setupRecording();
         this.setupTabs();
         this.setupStudioActions();
@@ -322,7 +326,7 @@ class App {
     /** Called by DeckUploader whenever a file is attached or removed. */
     _onDeckChanged(hasDeck) {
         if (hasDeck) {
-            this._hideNoDeckNotice();
+            this._dismissNoDeckModal(false);
         }
         this._syncDeckRecordingState();
     }
@@ -350,31 +354,48 @@ class App {
         }
     }
 
-    _wireNoDeckNoticeActions() {
-        const okBtn = document.getElementById('no-deck-notice-ok');
+    _wireNoDeckModalActions() {
+        const okBtn = document.getElementById('no-deck-modal-ok');
         if (!okBtn) {
             return;
         }
         okBtn.addEventListener('click', () => {
             this.noDeckNoticeAcknowledged = true;
-            this._hideNoDeckNotice();
+            this._dismissNoDeckModal(true);
         });
     }
 
-    _showNoDeckNotice() {
-        const notice = document.getElementById('no-deck-notice');
-        if (!notice) {
-            return;
+    _openNoDeckModalAndWait() {
+        if (this.noDeckModalPromise) {
+            return this.noDeckModalPromise;
         }
-        notice.classList.add('active');
+
+        const modal = document.getElementById('no-deck-modal');
+        if (!modal) {
+            return Promise.resolve(false);
+        }
+
+        modal.classList.add('active');
+        this.noDeckModalPromise = new Promise((resolve) => {
+            this.noDeckModalResolver = resolve;
+        });
+        return this.noDeckModalPromise;
     }
 
-    _hideNoDeckNotice() {
-        const notice = document.getElementById('no-deck-notice');
-        if (!notice) {
+    _dismissNoDeckModal(confirmed) {
+        const modal = document.getElementById('no-deck-modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+
+        if (!this.noDeckModalResolver) {
+            this.noDeckModalPromise = null;
             return;
         }
-        notice.classList.remove('active');
+        const resolve = this.noDeckModalResolver;
+        this.noDeckModalResolver = null;
+        this.noDeckModalPromise = null;
+        resolve(Boolean(confirmed));
     }
 
     setupRecording() {
@@ -382,6 +403,9 @@ class App {
 
         recordBtn.addEventListener('click', async () => {
             if (this.isBusy || ['uploading', 'transcribing', 'feedbacking'].includes(this.stage)) {
+                return;
+            }
+            if (this.noDeckModalPromise) {
                 return;
             }
 
@@ -396,10 +420,12 @@ class App {
     async startRecording() {
         const hasDeck = !!(this.deckUploader && this.deckUploader.hasDeck());
         if (!hasDeck && !this.noDeckNoticeAcknowledged) {
-            this._showNoDeckNotice();
-            return;
+            const confirmed = await this._openNoDeckModalAndWait();
+            if (!confirmed) {
+                return;
+            }
         }
-        this._hideNoDeckNotice();
+        this._dismissNoDeckModal(false);
 
         const timer = document.getElementById('timer');
 
@@ -3017,6 +3043,7 @@ class App {
         this.feedbackProgressPct = 0;
         this.feedbackPulseTick = 0;
         this.feedbackActiveRound = null;
+        this._dismissNoDeckModal(false);
         this.setStage('idle');
         this.updateJobMeta(null);
         this.setRecordingStatus('', 'info', false);

@@ -454,6 +454,8 @@ body {
 /* ── Recording Primary Card ── */
 .recording-primary {
     flex: 1 1 auto;
+    position: relative;
+    overflow: hidden;
 }
 
 .recording-primary .recording-area {
@@ -707,49 +709,57 @@ body {
     padding: 40px 20px;
 }
 
-.no-deck-notice {
+.no-deck-modal-backdrop {
+    position: absolute;
+    inset: 0;
     display: none;
+    z-index: 30;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
-    margin: 6px 0 14px;
-    padding: 14px 16px;
-    border-radius: 12px;
-    border: 1px solid #D8B4FE;
-    background: linear-gradient(135deg, #FFFFFF 0%, #FAF5FF 100%);
-    box-shadow: 0 10px 20px rgba(126, 34, 206, 0.12);
+    justify-content: center;
+    background: rgba(248, 250, 252, 0.72);
+    backdrop-filter: blur(2px);
+    padding: 20px;
 }
 
-.no-deck-notice.active {
+.no-deck-modal-backdrop.active {
     display: flex;
 }
 
-.no-deck-notice-copy {
+.no-deck-modal-card {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    min-width: 0;
+    gap: 12px;
+    width: min(520px, calc(100% - 32px));
+    border-radius: 16px;
+    border: 1px solid #D8B4FE;
+    background: linear-gradient(145deg, #FFFFFF 0%, #FAF5FF 100%);
+    box-shadow: 0 18px 44px rgba(91, 33, 182, 0.24);
+    padding: 24px;
 }
 
-.no-deck-notice-title {
+.no-deck-modal-title {
     margin: 0;
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.2;
     color: #581C87;
 }
 
-.no-deck-notice-text {
+.no-deck-modal-text {
     margin: 0;
-    font-size: 13px;
+    font-size: 15px;
     color: #6B21A8;
-    line-height: 1.45;
+    line-height: 1.55;
 }
 
-.no-deck-notice-ok {
-    flex-shrink: 0;
-    margin-left: auto;
-    min-width: 72px;
+.no-deck-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 2px;
+}
+
+.no-deck-modal-ok {
+    min-width: 96px;
 }
 
 .recording-visual {
@@ -1834,13 +1844,24 @@ body {
         height: 100px;
     }
 
-    .no-deck-notice.active {
-        flex-direction: column;
-        align-items: stretch;
-        text-align: left;
+    .no-deck-modal-card {
+        padding: 20px;
+        gap: 10px;
     }
 
-    .no-deck-notice-ok {
+    .no-deck-modal-title {
+        font-size: 19px;
+    }
+
+    .no-deck-modal-text {
+        font-size: 14px;
+    }
+
+    .no-deck-modal-actions {
+        justify-content: stretch;
+    }
+
+    .no-deck-modal-ok {
         width: 100%;
     }
 
