@@ -11,6 +11,7 @@ from fastapi import HTTPException, UploadFile
 
 from .constants import CHUNK_SIZE, MAX_UPLOAD_BYTES
 from .deck_extractor import extract_deck_text
+from .feedback_orchestrator import ensure_feedback_orchestration_started
 from .gcs_utils import (
     build_gs_uri,
     delete_blob,
@@ -406,6 +407,12 @@ def process_transcription_job(
             job_id,
             len(transcript_result.get("full_text", "")),
             len(transcript_result.get("words", [])),
+        )
+
+        ensure_feedback_orchestration_started(
+            job_store,
+            job_id,
+            source="transcription_done",
         )
     except Exception as exc:
         job_store.update_job(job_id, status="failed", progress=100, error=str(exc))

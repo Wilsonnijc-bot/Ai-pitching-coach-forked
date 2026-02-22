@@ -14,16 +14,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .constants import MAX_REQUEST_BYTES, MAX_UPLOAD_BYTES
-from .coaching_round1 import run_round1
-from .coaching_round2 import run_round2
-from .coaching_round3 import run_round3
-from .coaching_round4 import run_round4
-from .coaching_round5 import run_round5
 from .deck_extractor import (
     detect_extension,
     sanitize_filename,
     validate_deck_extension,
 )
+from .feedback_orchestrator import ensure_feedback_orchestration_started
 from .gcs_utils import (
     build_gs_uri,
     download_blob_to_file,
@@ -655,13 +651,11 @@ def generate_round1_feedback(job_id: str) -> Round1FeedbackResponse:
     if job.feedback_round_1_status == "running":
         return Round1FeedbackResponse(job_id=job_id, status="running")
 
-    job_store.update_job(
+    ensure_feedback_orchestration_started(
+        job_store,
         job_id,
-        feedback_round_1_status="running",
-        feedback_round_1_error=None,
-        feedback_round_1_version="r1_v2",
+        source="feedback_endpoint_round1",
     )
-    _fire_and_forget(run_round1, job_store, job_id)
     return Round1FeedbackResponse(job_id=job_id, status="running")
 
 
@@ -686,13 +680,11 @@ def generate_round2_feedback(job_id: str) -> Round2FeedbackResponse:
     if job.feedback_round_2_status == "running":
         return Round2FeedbackResponse(job_id=job_id, status="running")
 
-    job_store.update_job(
+    ensure_feedback_orchestration_started(
+        job_store,
         job_id,
-        feedback_round_2_status="running",
-        feedback_round_2_error=None,
-        feedback_round_2_version="r2_v1",
+        source="feedback_endpoint_round2",
     )
-    _fire_and_forget(run_round2, job_store, job_id)
     return Round2FeedbackResponse(job_id=job_id, status="running")
 
 
@@ -717,13 +709,11 @@ def generate_round3_feedback(job_id: str) -> Round3FeedbackResponse:
     if job.feedback_round_3_status == "running":
         return Round3FeedbackResponse(job_id=job_id, status="running")
 
-    job_store.update_job(
+    ensure_feedback_orchestration_started(
+        job_store,
         job_id,
-        feedback_round_3_status="running",
-        feedback_round_3_error=None,
-        feedback_round_3_version="r3_v2",
+        source="feedback_endpoint_round3",
     )
-    _fire_and_forget(run_round3, job_store, job_id)
     return Round3FeedbackResponse(job_id=job_id, status="running")
 
 
@@ -748,13 +738,11 @@ def generate_round4_feedback(job_id: str) -> Round4FeedbackResponse:
     if job.feedback_round_4_status == "running":
         return Round4FeedbackResponse(job_id=job_id, status="running")
 
-    job_store.update_job(
+    ensure_feedback_orchestration_started(
+        job_store,
         job_id,
-        feedback_round_4_status="running",
-        feedback_round_4_error=None,
-        feedback_round_4_version="r4_v1",
+        source="feedback_endpoint_round4",
     )
-    _fire_and_forget(run_round4, job_store, job_id)
     return Round4FeedbackResponse(job_id=job_id, status="running")
 
 
@@ -779,13 +767,11 @@ def generate_round5_feedback(job_id: str) -> Round5FeedbackResponse:
     if job.feedback_round_5_status == "running":
         return Round5FeedbackResponse(job_id=job_id, status="running")
 
-    job_store.update_job(
+    ensure_feedback_orchestration_started(
+        job_store,
         job_id,
-        feedback_round_5_status="running",
-        feedback_round_5_error=None,
-        feedback_round_5_version="r5_v2",
+        source="feedback_endpoint_round5",
     )
-    _fire_and_forget(run_round5, job_store, job_id)
     return Round5FeedbackResponse(job_id=job_id, status="running")
 
 

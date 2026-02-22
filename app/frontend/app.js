@@ -2801,7 +2801,10 @@ class App {
         }
 
         const pct = this._clampPercent(this.feedbackProgressPct, segmentStart);
-        const progressText = label || `${Math.round(pct)}% Processing round ${safeRound}`;
+        const autoLabel = (job && this.hasRoundFeedback(job, safeRound))
+            ? `${Math.round(pct)}% Round ${safeRound} feedback is done`
+            : `${Math.round(pct)}% Processing round ${safeRound}`;
+        const progressText = label || autoLabel;
         this.setSummaryStatus(progressText, 'info', true, {
             progress: {
                 title: 'Feedback Generation',
