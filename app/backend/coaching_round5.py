@@ -12,6 +12,7 @@ from .storage import JobStore
 logger = logging.getLogger("uvicorn.error")
 MAX_ERROR_CHARS = 1200
 EXPECTED_CRITERIA = {"Overview", "Pitch Deck Evaluation"}
+NO_DECK_OVERALL_ASSESSMENT = "There is no slide uploaded"
 
 
 def _truncate(text: str, max_chars: int = MAX_ERROR_CHARS) -> str:
@@ -89,6 +90,35 @@ def _validate_round5_schema(payload: dict) -> dict:
     return payload
 
 
+def _job_has_uploaded_deck(job) -> bool:
+    deck = getattr(job, "deck", None)
+    if not isinstance(deck, dict):
+        return False
+    return bool(str(deck.get("filename") or "").strip())
+
+
+def _force_no_deck_pitch_section(payload: dict) -> dict:
+    sections = payload.get("sections")
+    if not isinstance(sections, list):
+        return payload
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        criterion = str(section.get("criterion") or "").strip()
+        if criterion != "Pitch Deck Evaluation":
+            continue
+
+        section["verdict"] = "mixed"
+        section["overall_assessment"] = NO_DECK_OVERALL_ASSESSMENT
+        section["lacking_content"] = []
+        section["structural_flow_issues"] = []
+        section["recommended_refinements"] = []
+        break
+
+    return payload
+
+
 def _build_round5_user_prompt(
     shared_input: SharedCoachingInput,
     *,
@@ -159,6 +189,7 @@ def run_round5(job_store: JobStore, job_id: str) -> dict:
         if prerequisites:
             joined = ", ".join(prerequisites)
             raise RuntimeError(f"Round 5 requires completed rounds 1-4. Missing: {joined}.")
+        has_uploaded_deck = _job_has_uploaded_deck(job)
 
         shared_input = load_shared_input(job_store, job_id)
         user_prompt = _build_round5_user_prompt(
@@ -175,6 +206,10 @@ def run_round5(job_store: JobStore, job_id: str) -> dict:
         except Exception:
             repaired_output = _request_round5_output(_repair_prompt(raw_output))
             parsed = _validate_round5_schema(_parse_json(repaired_output))
+
+        if not has_uploaded_deck:
+            parsed = _force_no_deck_pitch_section(parsed)
+            parsed = _validate_round5_schema(parsed)
 
         job_store.update_job(
             job_id,

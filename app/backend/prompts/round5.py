@@ -69,7 +69,7 @@ Workflow for the Overview section
 
 Rules:
 - Do not invent facts. If evidence is missing, say so clearly.
-- If no deck is provided, explicitly note that limitation in Pitch Deck Evaluation.
+- If no deck is provided, set Pitch Deck Evaluation.overall_assessment exactly to "There is no slide uploaded".
 - Keep language professional, direct, and investor-grade.
 - Output JSON only. No markdown. No extra text.
 """
@@ -125,4 +125,6 @@ Transcript:
 <<<{transcript_full_text}>>>
 
 Deck context (may be empty):
-<<<{deck_text_or_empty}>>>"""
+<<<{deck_text_or_empty}>>>
+
+If Deck context is empty, set Pitch Deck Evaluation.overall_assessment exactly to "There is no slide uploaded"."""

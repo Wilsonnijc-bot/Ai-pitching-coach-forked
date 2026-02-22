@@ -13,6 +13,7 @@ const SUMMARY_POLL_INTERVAL_MS = 1500;
 const TRANSCRIPTION_TIMEOUT_MS = 12 * 60 * 1000;
 const SUMMARY_TIMEOUT_MS = 12 * 60 * 1000;
 const STAGES = new Set(['idle', 'recording', 'uploading', 'transcribing', 'feedbacking', 'done', 'error']);
+const NO_DECK_OVERALL_ASSESSMENT = 'There is no slide uploaded';
 
 class App {
     constructor() {
@@ -35,6 +36,7 @@ class App {
         this.feedbackProgressPct = 0;
         this.feedbackPulseTick = 0;
         this.feedbackActiveRound = null;
+        this.noDeckNoticeAcknowledged = false;
 
         this.init();
     }
@@ -153,9 +155,9 @@ class App {
                     <!-- Step 1: Slim deck upload bar -->
                     <div class="deck-upload-bar" id="deck-upload-card">
                         <div class="upload-area">
-                            <span class="upload-bar-label">Upload your pitch deck</span>
+                            <span class="upload-bar-label">Upload your pitch deck (optional)</span>
                             <span class="upload-bar-cta">Drag &amp; drop here or click to browse</span>
-                            <span class="upload-bar-hint">.pdf / .pptx, max 25 MB</span>
+                            <span class="upload-bar-hint">Optional: .pdf / .pptx, max 25 MB</span>
                             <input type="file" class="file-input" accept=".pdf,.pptx">
                         </div>
 
@@ -203,6 +205,16 @@ class App {
                             </button>
 
                             <div class="timer" id="timer">00:00</div>
+                        </div>
+
+                        <div class="no-deck-notice" id="no-deck-notice" role="alert" aria-live="polite">
+                            <div class="no-deck-notice-copy">
+                                <p class="no-deck-notice-title">Deck upload is optional</p>
+                                <p class="no-deck-notice-text">
+                                    You can continue without a deck. If none is uploaded, slide feedback will say: "There is no slide uploaded".
+                                </p>
+                            </div>
+                            <button type="button" class="btn btn-primary btn-small no-deck-notice-ok" id="no-deck-notice-ok">OK</button>
                         </div>
 
                         <p class="job-meta" id="job-meta">No active job.</p>
@@ -283,6 +295,7 @@ class App {
         this.deckUploader = new DeckUploader('deck-upload-card', {
             onFileChange: (hasDeck) => this._onDeckChanged(hasDeck),
         });
+        this._wireNoDeckNoticeActions();
         this.setupRecording();
         this.setupTabs();
         this.setupStudioActions();
@@ -294,9 +307,7 @@ class App {
             this.renderSummary(null);
         }
         this.applyStudioLayout();
-
-        // Gate: disable recording until a deck is attached
-        this._applyDeckGate();
+        this._syncDeckRecordingState();
     }
 
     setupStudioActions() {
@@ -310,11 +321,14 @@ class App {
 
     /** Called by DeckUploader whenever a file is attached or removed. */
     _onDeckChanged(hasDeck) {
-        this._applyDeckGate();
+        if (hasDeck) {
+            this._hideNoDeckNotice();
+        }
+        this._syncDeckRecordingState();
     }
 
-    /** Enable / disable the record button based on deck presence. */
-    _applyDeckGate() {
+    /** Keep record controls ready regardless of deck presence (deck is optional). */
+    _syncDeckRecordingState() {
         const hasDeck = this.deckUploader && this.deckUploader.hasDeck();
         const recordBtn = document.getElementById('record-btn');
         const recordText = document.getElementById('record-text');
@@ -325,17 +339,42 @@ class App {
             return;
         }
 
+        recordBtn.disabled = false;
+        recordBtn.classList.remove('no-deck');
+        recordText.textContent = 'Start recording';
+
         if (hasDeck) {
-            recordBtn.disabled = false;
-            recordBtn.classList.remove('no-deck');
-            recordText.textContent = 'Start recording';
             this.setRecordingStatus('Deck attached — you\'re ready to record!', 'success', false);
         } else {
-            recordBtn.disabled = true;
-            recordBtn.classList.add('no-deck');
-            recordText.textContent = 'Upload deck first';
-            this.setRecordingStatus('Upload your pitch deck above before recording.', 'info', false);
+            this.setRecordingStatus('Deck is optional. You can start recording now.', 'info', false);
         }
+    }
+
+    _wireNoDeckNoticeActions() {
+        const okBtn = document.getElementById('no-deck-notice-ok');
+        if (!okBtn) {
+            return;
+        }
+        okBtn.addEventListener('click', () => {
+            this.noDeckNoticeAcknowledged = true;
+            this._hideNoDeckNotice();
+        });
+    }
+
+    _showNoDeckNotice() {
+        const notice = document.getElementById('no-deck-notice');
+        if (!notice) {
+            return;
+        }
+        notice.classList.add('active');
+    }
+
+    _hideNoDeckNotice() {
+        const notice = document.getElementById('no-deck-notice');
+        if (!notice) {
+            return;
+        }
+        notice.classList.remove('active');
     }
 
     setupRecording() {
@@ -355,11 +394,12 @@ class App {
     }
 
     async startRecording() {
-        // Guard: require deck before recording
-        if (!this.deckUploader || !this.deckUploader.hasDeck()) {
-            this.setRecordingStatus('Please upload your pitch deck before recording.', 'error', false);
+        const hasDeck = !!(this.deckUploader && this.deckUploader.hasDeck());
+        if (!hasDeck && !this.noDeckNoticeAcknowledged) {
+            this._showNoDeckNotice();
             return;
         }
+        this._hideNoDeckNotice();
 
         const timer = document.getElementById('timer');
 
@@ -1472,12 +1512,28 @@ class App {
 
     renderDeckEvaluationSection(section, criterion, verdictLabel, verdictClass) {
         let detailsHtml = '';
+        const assessment = String(section.overall_assessment || '').trim();
+        const noDeckOnlyMessage = assessment === NO_DECK_OVERALL_ASSESSMENT;
 
-        if (section.overall_assessment) {
+        if (assessment) {
             detailsHtml += `
                 <div class="criterion-detail semantic-neutral-box">
                     <h4 class="subsection-label semantic-label-neutral">Overall Assessment</h4>
-                    <p>${this.escapeHtml(String(section.overall_assessment))}</p>
+                    <p>${this.escapeHtml(assessment)}</p>
+                </div>
+            `;
+        }
+
+        if (noDeckOnlyMessage) {
+            return `
+                <div class="section-card">
+                    <div class="section-card-header">
+                        <h3 class="section-card-title">${criterion}</h3>
+                        <span class="verdict-badge ${verdictClass}">${verdictLabel}</span>
+                    </div>
+                    <div class="section-card-body">
+                        ${detailsHtml || '<p class="summary-muted">No details available</p>'}
+                    </div>
                 </div>
             `;
         }
@@ -2983,8 +3039,8 @@ class App {
         this._hideDistanceOverlays();
         this.applyStudioLayout();
 
-        // Re-apply deck gate after reset
-        this._applyDeckGate();
+        // Keep record controls synced after reset (deck is optional).
+        this._syncDeckRecordingState();
     }
 
     showToast(message, type = 'info') {

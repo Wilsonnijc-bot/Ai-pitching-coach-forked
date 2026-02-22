@@ -302,18 +302,6 @@ def process_transcription_job(
         def on_stage(status: str, progress: int) -> None:
             job_store.update_job(job_id, status=status, progress=progress, error=None)
 
-        stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
-        transcript_result = stt_payload.get("transcript", {})
-        transcript_full_text = str(transcript_result.get("full_text") or "")
-        transcript_words = list(transcript_result.get("words") or [])
-        transcript_segments = list(transcript_result.get("segments") or [])
-        derived_metrics = compute_derived_metrics(transcript_words)
-        has_diarization = bool(stt_payload.get("has_diarization", False))
-
-        # Parsing is complete at this point; now we run local signal/video metrics.
-        job_store.update_job(job_id, status="computing_metrics", progress=85, error=None)
-
-        # --- Compute tone + body-language metrics in parallel ---
         def _compute_tone_metrics() -> dict:
             result = {}
             try:
@@ -352,10 +340,25 @@ def process_transcription_job(
                 logger.error("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
                 return None
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            tone_future: Future = pool.submit(_compute_tone_metrics)
-            body_future: Future = pool.submit(_compute_body_language)
+        # --- Overlap body-language compute with STT wait window ---
+        with ThreadPoolExecutor(max_workers=2) as metric_pool:
+            body_future: Future = metric_pool.submit(_compute_body_language)
+
+            stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
+
+            transcript_result = stt_payload.get("transcript", {})
+            transcript_full_text = str(transcript_result.get("full_text") or "")
+            transcript_words = list(transcript_result.get("words") or [])
+            transcript_segments = list(transcript_result.get("segments") or [])
+            derived_metrics = compute_derived_metrics(transcript_words)
+            has_diarization = bool(stt_payload.get("has_diarization", False))
+
+            # Parsing is complete at this point; now we run local signal metrics.
+            job_store.update_job(job_id, status="computing_metrics", progress=85, error=None)
+
+            tone_future: Future = metric_pool.submit(_compute_tone_metrics)
             tone_result = tone_future.result()
+
             body_language = body_future.result()
 
         derived_metrics.update(tone_result)
