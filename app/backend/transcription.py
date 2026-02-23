@@ -70,12 +70,22 @@ def process_deck_asset(
     job_store: JobStore,
     job_id: str,
     deck_upload: dict,
-    *,
-    progress_done: Optional[int] = None,
 ) -> None:
-    job_store.update_job(job_id, status="deck_processing", progress=10, error=None)
-
     deck_path = Path(deck_upload["storage_path"])
+
+    # Persist a pending deck row immediately so round-5 orchestration can
+    # distinguish "deck uploaded but still extracting" from "no deck uploaded".
+    job_store.save_deck_asset(
+        job_id,
+        filename=deck_upload["filename"],
+        content_type=deck_upload.get("content_type"),
+        size_bytes=deck_upload["size_bytes"],
+        storage_path=str(deck_path),
+        extracted_text="",
+        extracted_json=None,
+        num_pages_or_slides=None,
+    )
+
     extraction = extract_deck_text(deck_path)
     job_store.save_deck_asset(
         job_id,
@@ -94,9 +104,6 @@ def process_deck_asset(
         extraction.num_pages_or_slides,
         len(extraction.extracted_text),
     )
-
-    if progress_done is not None:
-        job_store.update_job(job_id, progress=progress_done)
 
 
 def parse_bool_env(name: str, default: bool) -> bool:
@@ -341,7 +348,6 @@ def process_transcription_job(
     job_id: str,
     input_path: Path,
     temp_dir: Path,
-    deck_upload: Optional[dict] = None,
 ) -> None:
     bucket_name: Optional[str] = None
     audio_blob_path = build_audio_blob_path(job_id)
@@ -355,15 +361,16 @@ def process_transcription_job(
     has_diarization: Optional[bool] = None
 
     try:
-        if deck_upload is not None:
-            process_deck_asset(job_store, job_id, deck_upload, progress_done=10)
-        else:
-            job_store.update_job(job_id, status="transcribing", progress=10, error=None)
+        job_store.update_job(job_id, status="transcribing", progress=10, error=None)
 
-        # --- Upload video to GCS and convert audio in parallel ---
+        # --- Start local compute/upload tasks with maximal overlap ---
         bucket_name = get_default_bucket()
         video_blob_path = f"jobs/{job_id}/video{input_path.suffix}"
         wav_path = temp_dir / "audio.wav"
+        existing_video_gcs_uri = None
+        job = job_store.get_job(job_id)
+        if job:
+            existing_video_gcs_uri = str(getattr(job, "video_gcs_uri", "") or "").strip()
 
         def _upload_video() -> Optional[str]:
             try:
@@ -382,81 +389,6 @@ def process_transcription_job(
 
         def _convert_audio() -> None:
             convert_audio_to_wav_16khz_mono(input_path, wav_path)
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            video_future: Future = pool.submit(_upload_video)
-            audio_future: Future = pool.submit(_convert_audio)
-            # Wait for audio conversion (critical path); video upload can finish later
-            audio_future.result()
-
-        job_store.update_job(job_id, status="uploading_audio_to_gcs", progress=20, error=None)
-        gcs_audio_uri = upload_file(
-            bucket_name,
-            audio_blob_path,
-            wav_path,
-            content_type="audio/wav",
-        )
-        uploaded_audio = True
-
-        logger.info(
-            "job_id=%s uploaded_audio_to_gcs uri=%s",
-            job_id,
-            gcs_audio_uri,
-        )
-
-        chunk_specs: list[dict] = []
-        stt_chunk_enabled = parse_bool_env("STT_PARALLEL_CHUNKS_ENABLED", False)
-        stt_chunk_overlap = parse_float_env("STT_PARALLEL_CHUNK_OVERLAP_SECONDS", 2.0, minimum=0.0)
-        stt_chunk_min_audio_seconds = parse_float_env(
-            "STT_PARALLEL_CHUNK_MIN_AUDIO_SECONDS",
-            20.0,
-            minimum=1.0,
-        )
-        stt_chunk_workers = parse_int_env("STT_PARALLEL_CHUNK_MAX_WORKERS", 4, minimum=1)
-
-        if stt_chunk_enabled:
-            try:
-                wav_duration_seconds = get_wav_duration_seconds(wav_path)
-                if wav_duration_seconds > stt_chunk_min_audio_seconds:
-                    chunk_ranges = build_stt_four_chunk_ranges(
-                        duration_seconds=wav_duration_seconds,
-                        overlap_seconds=stt_chunk_overlap,
-                    )
-                    chunk_paths = split_wav_into_chunks(
-                        wav_path=wav_path,
-                        output_dir=temp_dir / "audio_chunks",
-                        chunk_ranges=chunk_ranges,
-                    )
-
-                    for index, chunk_path in enumerate(chunk_paths):
-                        blob_path = f"{chunk_audio_prefix}chunk_{index + 1}.wav"
-                        chunk_uri = upload_file(
-                            bucket_name,
-                            blob_path,
-                            chunk_path,
-                            content_type="audio/wav",
-                        )
-                        spec = dict(chunk_ranges[index])
-                        spec["uri"] = chunk_uri
-                        chunk_specs.append(spec)
-                    uploaded_chunk_audio = True
-                    logger.info(
-                        "job_id=%s uploaded_audio_chunks_to_gcs count=%s overlap_seconds=%.2f duration_seconds=%.2f",
-                        job_id,
-                        len(chunk_specs),
-                        stt_chunk_overlap,
-                        wav_duration_seconds,
-                    )
-            except Exception:
-                chunk_specs = []
-                logger.warning(
-                    "job_id=%s stt_chunk_preparation_failed_falling_back_to_single",
-                    job_id,
-                    exc_info=True,
-                )
-
-        def on_stage(status: str, progress: int) -> None:
-            job_store.update_job(job_id, status=status, progress=progress, error=None)
 
         def _compute_tone_metrics() -> dict:
             result = {}
@@ -496,9 +428,90 @@ def process_transcription_job(
                 logger.error("job_id=%s body_language_metrics_failed", job_id, exc_info=True)
                 return None
 
-        # --- Overlap body-language compute with STT wait window ---
-        with ThreadPoolExecutor(max_workers=2) as metric_pool:
-            body_future: Future = metric_pool.submit(_compute_body_language)
+        with ThreadPoolExecutor(max_workers=3) as pipeline_pool:
+            body_future: Future = pipeline_pool.submit(_compute_body_language)
+            audio_future: Future = pipeline_pool.submit(_convert_audio)
+            video_future: Optional[Future] = None
+            if existing_video_gcs_uri:
+                logger.info(
+                    "job_id=%s video_upload_skipped_existing_gcs_uri uri=%s",
+                    job_id,
+                    existing_video_gcs_uri,
+                )
+            else:
+                video_future = pipeline_pool.submit(_upload_video)
+
+            # Audio conversion gates STT start.
+            audio_future.result()
+
+            job_store.update_job(job_id, status="uploading_audio_to_gcs", progress=20, error=None)
+            gcs_audio_uri = upload_file(
+                bucket_name,
+                audio_blob_path,
+                wav_path,
+                content_type="audio/wav",
+            )
+            uploaded_audio = True
+
+            logger.info(
+                "job_id=%s uploaded_audio_to_gcs uri=%s",
+                job_id,
+                gcs_audio_uri,
+            )
+
+            chunk_specs: list[dict] = []
+            stt_chunk_enabled = parse_bool_env("STT_PARALLEL_CHUNKS_ENABLED", False)
+            stt_chunk_overlap = parse_float_env("STT_PARALLEL_CHUNK_OVERLAP_SECONDS", 2.0, minimum=0.0)
+            stt_chunk_min_audio_seconds = parse_float_env(
+                "STT_PARALLEL_CHUNK_MIN_AUDIO_SECONDS",
+                20.0,
+                minimum=1.0,
+            )
+            stt_chunk_workers = parse_int_env("STT_PARALLEL_CHUNK_MAX_WORKERS", 4, minimum=1)
+
+            if stt_chunk_enabled:
+                try:
+                    wav_duration_seconds = get_wav_duration_seconds(wav_path)
+                    if wav_duration_seconds > stt_chunk_min_audio_seconds:
+                        chunk_ranges = build_stt_four_chunk_ranges(
+                            duration_seconds=wav_duration_seconds,
+                            overlap_seconds=stt_chunk_overlap,
+                        )
+                        chunk_paths = split_wav_into_chunks(
+                            wav_path=wav_path,
+                            output_dir=temp_dir / "audio_chunks",
+                            chunk_ranges=chunk_ranges,
+                        )
+
+                        for index, chunk_path in enumerate(chunk_paths):
+                            blob_path = f"{chunk_audio_prefix}chunk_{index + 1}.wav"
+                            chunk_uri = upload_file(
+                                bucket_name,
+                                blob_path,
+                                chunk_path,
+                                content_type="audio/wav",
+                            )
+                            spec = dict(chunk_ranges[index])
+                            spec["uri"] = chunk_uri
+                            chunk_specs.append(spec)
+                        uploaded_chunk_audio = True
+                        logger.info(
+                            "job_id=%s uploaded_audio_chunks_to_gcs count=%s overlap_seconds=%.2f duration_seconds=%.2f",
+                            job_id,
+                            len(chunk_specs),
+                            stt_chunk_overlap,
+                            wav_duration_seconds,
+                        )
+                except Exception:
+                    chunk_specs = []
+                    logger.warning(
+                        "job_id=%s stt_chunk_preparation_failed_falling_back_to_single",
+                        job_id,
+                        exc_info=True,
+                    )
+
+            def on_stage(status: str, progress: int) -> None:
+                job_store.update_job(job_id, status=status, progress=progress, error=None)
 
             if chunk_specs:
                 try:
@@ -528,20 +541,20 @@ def process_transcription_job(
             # Parsing is complete at this point; now we run local signal metrics.
             job_store.update_job(job_id, status="computing_metrics", progress=85, error=None)
 
-            tone_future: Future = metric_pool.submit(_compute_tone_metrics)
+            tone_future: Future = pipeline_pool.submit(_compute_tone_metrics)
             tone_result = tone_future.result()
-
             body_language = body_future.result()
+
+            # Ensure video upload finished (non-blocking wait) for non-direct paths.
+            if video_future is not None:
+                try:
+                    video_future.result(timeout=30)
+                except Exception:
+                    logger.warning("job_id=%s video_future_timeout_or_error", job_id, exc_info=True)
 
         derived_metrics.update(tone_result)
         if body_language is not None:
             derived_metrics["body_language"] = body_language
-
-        # Ensure video upload finished (non-blocking wait)
-        try:
-            video_future.result(timeout=30)
-        except Exception:
-            logger.warning("job_id=%s video_future_timeout_or_error", job_id, exc_info=True)
 
         job_store.update_job(job_id, status="writing_artifacts", progress=90, error=None)
         try:
@@ -646,15 +659,26 @@ def process_transcription_job(
 def process_deck_only_job(job_store: JobStore, job_id: str, deck_upload: dict) -> None:
     try:
         process_deck_asset(job_store, job_id, deck_upload)
-
-        job = job_store.get_job(job_id)
-        if not job:
-            return
-
-        if job.status == "deck_processing":
-            if job.result:
-                job_store.update_job(job_id, status="done", progress=100, error=None)
-            else:
-                job_store.update_job(job_id, status="queued", progress=20, error=None)
+        logger.info("job_id=%s deck_processing_done", job_id)
     except Exception as exc:
-        job_store.update_job(job_id, status="failed", progress=100, error=str(exc))
+        try:
+            # Mark extraction as finished-but-empty so round 5 does not keep
+            # waiting on a permanently pending deck.
+            job_store.save_deck_asset(
+                job_id,
+                filename=deck_upload["filename"],
+                content_type=deck_upload.get("content_type"),
+                size_bytes=deck_upload["size_bytes"],
+                storage_path=deck_upload["storage_path"],
+                extracted_text="",
+                extracted_json=None,
+                num_pages_or_slides=0,
+            )
+        except Exception:
+            logger.warning("job_id=%s deck_failure_marker_write_failed", job_id, exc_info=True)
+        logger.warning(
+            "job_id=%s deck_processing_failed_non_fatal error=%s",
+            job_id,
+            exc,
+            exc_info=True,
+        )

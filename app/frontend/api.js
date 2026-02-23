@@ -468,6 +468,34 @@ export async function startProcessing(jobId, deckFile = null) {
 }
 
 /**
+ * Attach deck to an existing job in a separate request.
+ * @param {string} jobId
+ * @param {File} deckFile
+ * @returns {Promise<{job_id:string, status:string}>}
+ */
+export async function attachDeckToJob(jobId, deckFile) {
+    if (!deckFile) {
+        throw new Error('Missing deck file.');
+    }
+
+    const formData = new FormData();
+    formData.append('deck', deckFile, deckFile.name || 'deck');
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/deck`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const detail = await readErrorDetail(
+            response,
+            `Failed to attach deck (${response.status})`
+        );
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/**
  * Check if backend is available
  * @returns {Promise<boolean>}
  */

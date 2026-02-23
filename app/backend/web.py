@@ -221,8 +221,9 @@ async def create_transcription_job(
         job_id,
         input_path,
         temp_dir,
-        deck_upload,
     )
+    if deck_upload is not None:
+        _fire_and_forget(process_deck_only_job, job_store, job_id, deck_upload)
     return CreateJobResponse(job_id=job_id, status="queued")
 
 
@@ -435,8 +436,9 @@ async def process_from_gcs(
         job_id,
         input_path,
         temp_dir,
-        deck_upload,
     )
+    if deck_upload is not None:
+        _fire_and_forget(process_deck_only_job, job_store, job_id, deck_upload)
     logger.info("job_id=%s process_from_gcs started", job_id)
     return CreateJobResponse(job_id=job_id, status="queued")
 
@@ -542,8 +544,9 @@ async def start_processing(
         job_id,
         input_path,
         temp_dir,
-        deck_upload,
     )
+    if deck_upload is not None:
+        _fire_and_forget(process_deck_only_job, job_store, job_id, deck_upload)
     return CreateJobResponse(job_id=job_id, status="queued")
 
 

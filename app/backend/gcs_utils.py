@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
-from .gcp_auth import get_gcp_credentials, get_project_id_hint
+from .gcp_auth import CLOUD_PLATFORM_SCOPE, get_gcp_credentials, get_project_id_hint
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -205,14 +205,54 @@ def generate_signed_upload_url(
     clean_path = normalize_blob_path(blob_path)
     blob_obj = client.bucket(bucket).blob(clean_path)
     credentials = get_gcp_credentials()
-    url = blob_obj.generate_signed_url(
-        version="v4",
-        expiration=timedelta(minutes=expiration_minutes),
-        method="PUT",
-        content_type=content_type,
-        credentials=credentials,
-    )
-    return url
+    try:
+        return blob_obj.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=expiration_minutes),
+            method="PUT",
+            content_type=content_type,
+            credentials=credentials,
+        )
+    except Exception as exc:
+        error_text = str(exc).lower()
+        needs_iam_fallback = "private key" in error_text and "sign" in error_text
+        if not needs_iam_fallback:
+            raise
+
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request
+
+            runtime_credentials, _ = google.auth.default(scopes=[CLOUD_PLATFORM_SCOPE])
+            runtime_credentials.refresh(Request())
+            access_token = getattr(runtime_credentials, "token", None)
+            service_account_email = (
+                str(os.getenv("GCP_SERVICE_ACCOUNT_EMAIL", "")).strip()
+                or getattr(runtime_credentials, "service_account_email", None)
+            )
+            if not access_token:
+                raise RuntimeError("could not obtain access token for IAM signing fallback")
+            if not service_account_email:
+                raise RuntimeError(
+                    "missing service account email for IAM signing fallback "
+                    "(set GCP_SERVICE_ACCOUNT_EMAIL)"
+                )
+
+            return blob_obj.generate_signed_url(
+                version="v4",
+                expiration=timedelta(minutes=expiration_minutes),
+                method="PUT",
+                content_type=content_type,
+                access_token=access_token,
+                service_account_email=service_account_email,
+            )
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                "Signed URL generation failed with token-only runtime credentials. "
+                "Ensure the Cloud Run service account can sign blobs "
+                "(iam.serviceAccounts.signBlob / Service Account Token Creator), "
+                "or provide service-account key credentials."
+            ) from fallback_exc
 
 
 def download_blob_to_file(bucket: str, blob_path: str, local_path: Path) -> None:

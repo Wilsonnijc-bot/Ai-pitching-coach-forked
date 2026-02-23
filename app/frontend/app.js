@@ -2,7 +2,7 @@
 
 import { VideoRecorder, formatTime } from './recorder.js';
 import { DeckUploader } from './deckUpload.js';
-import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, startRound5Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs, uploadCalibrationPhoto } from './api.js';
+import { createJob, getJob, startRound1Feedback, startRound2Feedback, startRound3Feedback, startRound4Feedback, startRound5Feedback, prepareJob, uploadVideoStreaming, uploadVideoChunked, startProcessing, getUploadUrl, uploadVideoDirectToGcs, processFromGcs, uploadCalibrationPhoto, attachDeckToJob } from './api.js';
 
 const MAX_RECORD_SECONDS = 5 * 60;
 const MIN_RECORD_SECONDS = 2;
@@ -645,6 +645,18 @@ class App {
                     jobId = prepared.job_id;
                 }
 
+                if (selectedDeck) {
+                    attachDeckToJob(jobId, selectedDeck).catch((deckErr) => {
+                        console.warn('Deck upload failed in background; continuing without deck context:', deckErr.message);
+                        this.setSummaryStatus(
+                            'Deck upload failed. Continuing without slide context for feedback.',
+                            'warning',
+                            false,
+                        );
+                        return null;
+                    });
+                }
+
                 let gcsUploadSucceeded = false;
                 try {
                     this.setRecordingStatus('Requesting upload URL...', 'info', true);
@@ -659,7 +671,7 @@ class App {
                     gcsUploadSucceeded = true;
 
                     this.setRecordingStatus('Starting processing...', 'info', true);
-                    await processFromGcs(jobId, selectedDeck);
+                    await processFromGcs(jobId, null);
                 } catch (gcsErr) {
                     console.warn('Direct GCS upload failed, falling back to streaming upload:', gcsErr.message);
                 }
@@ -674,7 +686,7 @@ class App {
                     });
 
                     this.setRecordingStatus('Starting processing...', 'info', true);
-                    await startProcessing(jobId, selectedDeck);
+                    await startProcessing(jobId, null);
                 }
             } catch (uploadErr) {
                 throw uploadErr;

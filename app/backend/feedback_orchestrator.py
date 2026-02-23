@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,6 +37,67 @@ def _round_done(job, round_number: int) -> bool:
     status = getattr(job, f"feedback_round_{round_number}_status", None)
     payload = getattr(job, f"feedback_round_{round_number}", None)
     return status == "done" and isinstance(payload, dict)
+
+
+def _round5_deck_wait_seconds() -> float:
+    raw = os.getenv("ROUND5_DECK_WAIT_SECONDS", "90").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 90.0
+    return max(0.0, value)
+
+
+def _is_deck_pending(job) -> bool:
+    deck = getattr(job, "deck", None)
+    if not isinstance(deck, dict):
+        return False
+    filename = str(deck.get("filename") or "").strip()
+    if not filename:
+        return False
+    return deck.get("num_pages_or_slides") is None
+
+
+def _wait_for_deck_if_pending(job_store: JobStore, job_id: str, source: str):
+    latest = job_store.get_job(job_id)
+    if not latest or not _is_deck_pending(latest):
+        return latest
+
+    wait_seconds = _round5_deck_wait_seconds()
+    if wait_seconds <= 0:
+        return latest
+
+    deadline = time.monotonic() + wait_seconds
+    logger.info(
+        "job_id=%s feedback_orchestration_round5_waiting_for_deck source=%s wait_seconds=%.1f",
+        job_id,
+        source,
+        wait_seconds,
+    )
+    while time.monotonic() < deadline:
+        sleep_seconds = min(1.0, max(0.0, deadline - time.monotonic()))
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        latest = job_store.get_job(job_id)
+        if not latest:
+            return None
+        if not _is_deck_pending(latest):
+            logger.info(
+                "job_id=%s feedback_orchestration_round5_deck_ready source=%s",
+                job_id,
+                source,
+            )
+            return latest
+
+    latest = job_store.get_job(job_id)
+    if latest and _is_deck_pending(latest):
+        logger.info(
+            "job_id=%s feedback_orchestration_round5_deck_wait_timeout source=%s wait_seconds=%.1f",
+            job_id,
+            source,
+            wait_seconds,
+        )
+    return latest
 
 
 def _missing_prerequisites(job) -> list[str]:
@@ -161,6 +223,22 @@ def _run_feedback_orchestration(job_store: JobStore, job_id: str, source: str) -
             )
             return
 
+        if _round_done(latest, 5):
+            logger.info(
+                "job_id=%s feedback_orchestration_round5_already_done source=%s",
+                job_id,
+                source,
+            )
+            return
+
+        latest = _wait_for_deck_if_pending(job_store, job_id, source)
+        if not latest:
+            logger.warning(
+                "job_id=%s feedback_orchestration_abort reason=job_missing_before_round5 source=%s",
+                job_id,
+                source,
+            )
+            return
         if _round_done(latest, 5):
             logger.info(
                 "job_id=%s feedback_orchestration_round5_already_done source=%s",

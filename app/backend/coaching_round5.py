@@ -94,7 +94,10 @@ def _job_has_uploaded_deck(job) -> bool:
     deck = getattr(job, "deck", None)
     if not isinstance(deck, dict):
         return False
-    return bool(str(deck.get("filename") or "").strip())
+    has_filename = bool(str(deck.get("filename") or "").strip())
+    pages_or_slides = deck.get("num_pages_or_slides")
+    has_extraction = isinstance(pages_or_slides, int) and pages_or_slides > 0
+    return has_filename and has_extraction
 
 
 def _force_no_deck_pitch_section(payload: dict) -> dict:
