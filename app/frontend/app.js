@@ -211,12 +211,14 @@ class App {
 
                         <div class="no-deck-modal-backdrop" id="no-deck-modal" role="dialog" aria-modal="true" aria-labelledby="no-deck-modal-title" aria-describedby="no-deck-modal-text">
                             <div class="no-deck-modal-card">
-                                <h3 class="no-deck-modal-title" id="no-deck-modal-title">Deck upload is optional</h3>
+                                <h3 class="no-deck-modal-title" id="no-deck-modal-title">Notice</h3>
                                 <p class="no-deck-modal-text" id="no-deck-modal-text">
-                                    You can continue without a deck. If none is uploaded, slide feedback will say: "There is no slide uploaded".
+                                    Notice: You haven't uploaded your deck yet,<br>
+                                    but you can still practice without uploading deck
                                 </p>
                                 <div class="no-deck-modal-actions">
-                                    <button type="button" class="btn btn-primary no-deck-modal-ok" id="no-deck-modal-ok">OK</button>
+                                    <button type="button" class="btn btn-secondary no-deck-modal-cancel" id="no-deck-modal-cancel">Go back</button>
+                                    <button type="button" class="btn btn-primary no-deck-modal-continue" id="no-deck-modal-continue">Continue practicing</button>
                                 </div>
                             </div>
                         </div>
@@ -355,11 +357,15 @@ class App {
     }
 
     _wireNoDeckModalActions() {
-        const okBtn = document.getElementById('no-deck-modal-ok');
-        if (!okBtn) {
+        const cancelBtn = document.getElementById('no-deck-modal-cancel');
+        const continueBtn = document.getElementById('no-deck-modal-continue');
+        if (!cancelBtn || !continueBtn) {
             return;
         }
-        okBtn.addEventListener('click', () => {
+        cancelBtn.addEventListener('click', () => {
+            this._dismissNoDeckModal(false);
+        });
+        continueBtn.addEventListener('click', () => {
             this.noDeckNoticeAcknowledged = true;
             this._dismissNoDeckModal(true);
         });

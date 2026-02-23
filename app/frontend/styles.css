@@ -754,12 +754,14 @@ body {
 
 .no-deck-modal-actions {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    gap: 12px;
     margin-top: 2px;
 }
 
-.no-deck-modal-ok {
-    min-width: 96px;
+.no-deck-modal-cancel,
+.no-deck-modal-continue {
+    min-width: 140px;
 }
 
 .recording-visual {
@@ -1859,10 +1861,12 @@ body {
 
     .no-deck-modal-actions {
         justify-content: stretch;
+        gap: 10px;
     }
 
-    .no-deck-modal-ok {
-        width: 100%;
+    .no-deck-modal-cancel,
+    .no-deck-modal-continue {
+        flex: 1;
     }
 
     .timer {
