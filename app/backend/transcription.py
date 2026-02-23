@@ -409,7 +409,7 @@ def process_transcription_job(
         stt_chunk_overlap = parse_float_env("STT_PARALLEL_CHUNK_OVERLAP_SECONDS", 2.0, minimum=0.0)
         stt_chunk_min_audio_seconds = parse_float_env(
             "STT_PARALLEL_CHUNK_MIN_AUDIO_SECONDS",
-            120.0,
+            20.0,
             minimum=1.0,
         )
         stt_chunk_workers = parse_int_env("STT_PARALLEL_CHUNK_MAX_WORKERS", 4, minimum=1)
@@ -417,7 +417,7 @@ def process_transcription_job(
         if stt_chunk_enabled:
             try:
                 wav_duration_seconds = get_wav_duration_seconds(wav_path)
-                if wav_duration_seconds >= stt_chunk_min_audio_seconds:
+                if wav_duration_seconds > stt_chunk_min_audio_seconds:
                     chunk_ranges = build_stt_four_chunk_ranges(
                         duration_seconds=wav_duration_seconds,
                         overlap_seconds=stt_chunk_overlap,
