@@ -32,6 +32,13 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
     return max(minimum, parsed)
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def get_project_id() -> str:
     project_id = os.getenv("GCP_PROJECT_ID", "double-scholar-487115-b1").strip()
     if not project_id:
@@ -277,6 +284,7 @@ def _build_batch_request(
     gcs_audio_uri: str,
     output_uri: str,
     enable_diarization: bool,
+    use_inline_response: bool,
 ) -> cloud_speech.BatchRecognizeRequest:
     features = cloud_speech.RecognitionFeatures(
         enable_automatic_punctuation=True,
@@ -288,6 +296,15 @@ def _build_batch_request(
             max_speaker_count=2,
         )
 
+    if use_inline_response:
+        output_config = cloud_speech.RecognitionOutputConfig(
+            inline_response_config=cloud_speech.InlineOutputConfig()
+        )
+    else:
+        output_config = cloud_speech.RecognitionOutputConfig(
+            gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
+        )
+
     return cloud_speech.BatchRecognizeRequest(
         recognizer=recognizer,
         config=cloud_speech.RecognitionConfig(
@@ -297,10 +314,49 @@ def _build_batch_request(
             features=features,
         ),
         files=[cloud_speech.BatchRecognizeFileMetadata(uri=gcs_audio_uri)],
-        recognition_output_config=cloud_speech.RecognitionOutputConfig(
-            gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
-        ),
+        recognition_output_config=output_config,
     )
+
+
+def _read_inline_result_from_response(
+    *,
+    response: Optional[cloud_speech.BatchRecognizeResponse],
+    gcs_audio_uri: str,
+) -> tuple[dict, bool]:
+    if response is None:
+        raise RuntimeError("Speech-to-Text V2 inline response is empty.")
+
+    results = dict(response.results or {})
+    if not results:
+        raise RuntimeError("Speech-to-Text V2 inline response has no file results.")
+
+    file_result = results.get(gcs_audio_uri)
+    if file_result is None and len(results) == 1:
+        file_result = next(iter(results.values()))
+
+    if file_result is None:
+        sample_keys = ", ".join(str(key) for key in list(results.keys())[:3])
+        raise RuntimeError(
+            "Speech-to-Text V2 inline response does not contain expected file key "
+            f"for uri={gcs_audio_uri}. available_keys={sample_keys}"
+        )
+
+    error = getattr(file_result, "error", None)
+    if error and str(error).strip():
+        raise RuntimeError(f"Speech-to-Text V2 inline result contains error: {error}")
+
+    inline_result = getattr(file_result, "inline_result", None)
+    if inline_result is not None:
+        transcript = getattr(inline_result, "transcript", None)
+        if transcript is not None:
+            return _normalize_batch_results(transcript)
+
+    # Deprecated path still present in the protobuf; keep for compatibility.
+    deprecated_transcript = getattr(file_result, "transcript", None)
+    if deprecated_transcript is not None:
+        return _normalize_batch_results(deprecated_transcript)
+
+    raise RuntimeError("Speech-to-Text V2 inline response missing transcript payload.")
 
 
 def _run_single_file_transcription(
@@ -316,26 +372,55 @@ def _run_single_file_transcription(
     output_uri = build_gs_uri(bucket, output_prefix)
     recognizer = f"projects/{project_id}/locations/{location}/recognizers/_"
     client = _build_speech_client(location)
+    use_inline_response = _bool_env("STT_INLINE_RESPONSE_ENABLED", True)
+    diarization_enabled = _bool_env("STT_DIARIZATION_ENABLED", False)
 
     if emit_stages:
         _emit_stage(on_stage, "stt_batch_recognize", 40)
 
-    diarization_requested = True
-    try:
+    def _run_once(enable_diarization: bool, inline_mode: bool) -> tuple[dict, bool]:
         operation = client.batch_recognize(
             request=_build_batch_request(
                 recognizer=recognizer,
                 gcs_audio_uri=gcs_audio_uri,
                 output_uri=output_uri,
-                enable_diarization=True,
+                enable_diarization=enable_diarization,
+                use_inline_response=inline_mode,
             )
         )
         if emit_stages:
             _emit_stage(on_stage, "waiting_for_stt", 60)
         response = operation.result(timeout=600)
+        if emit_stages:
+            _emit_stage(on_stage, "parsing_results", 80)
+
+        if inline_mode:
+            return _read_inline_result_from_response(
+                response=response,
+                gcs_audio_uri=gcs_audio_uri,
+            )
+        return _read_results_from_gcs(
+            output_prefix=output_prefix,
+            bucket=bucket,
+            response=response,
+        )
+
+    def _run_with_inline_fallback(enable_diarization: bool) -> tuple[dict, bool]:
+        try:
+            return _run_once(enable_diarization=enable_diarization, inline_mode=use_inline_response)
+        except Exception:
+            if not use_inline_response:
+                raise
+            if emit_stages:
+                _emit_stage(on_stage, "stt_batch_recognize", 40)
+            return _run_once(enable_diarization=enable_diarization, inline_mode=False)
+
+    diarization_requested = diarization_enabled
+    try:
+        transcript, has_diarization = _run_with_inline_fallback(enable_diarization=diarization_requested)
     except Exception as first_exc:
         message = str(first_exc).lower()
-        if "diarization" not in message and "speaker" not in message:
+        if not diarization_requested or ("diarization" not in message and "speaker" not in message):
             raise RuntimeError(f"Speech-to-Text V2 BatchRecognize failed: {first_exc}") from first_exc
 
         # Fallback path: continue without diarization instead of failing whole job.
@@ -343,30 +428,13 @@ def _run_single_file_transcription(
         if emit_stages:
             _emit_stage(on_stage, "stt_batch_recognize", 40)
         try:
-            operation = client.batch_recognize(
-                request=_build_batch_request(
-                    recognizer=recognizer,
-                    gcs_audio_uri=gcs_audio_uri,
-                    output_uri=output_uri,
-                    enable_diarization=False,
-                )
-            )
-            if emit_stages:
-                _emit_stage(on_stage, "waiting_for_stt", 60)
-            response = operation.result(timeout=600)
+            transcript, has_diarization = _run_with_inline_fallback(enable_diarization=False)
         except Exception as second_exc:
             raise RuntimeError(
                 "Speech-to-Text V2 BatchRecognize failed after retry without diarization: "
                 f"{second_exc}"
             ) from second_exc
 
-    if emit_stages:
-        _emit_stage(on_stage, "parsing_results", 80)
-    transcript, has_diarization = _read_results_from_gcs(
-        output_prefix=output_prefix,
-        bucket=bucket,
-        response=response,
-    )
     return {
         "transcript": transcript,
         "has_diarization": has_diarization,
