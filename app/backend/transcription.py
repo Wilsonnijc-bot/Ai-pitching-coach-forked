@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import subprocess
+import wave
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,13 @@ from .gcs_utils import (
     upload_text,
 )
 from .metrics import compute_derived_metrics
-from .stt_v2 import build_audio_blob_path, build_output_prefix, transcribe_v2_chirp2_from_gcs
+from .stt_v2 import (
+    build_audio_blob_path,
+    build_chunk_output_root_prefix,
+    build_output_prefix,
+    transcribe_v2_chirp2_from_gcs,
+    transcribe_v2_chirp2_from_gcs_chunks,
+)
 from .storage import JobStore
 
 
@@ -97,6 +104,28 @@ def parse_bool_env(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_float_env(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return max(minimum, default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return max(minimum, default)
+    return max(minimum, value)
+
+
+def parse_int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return max(minimum, default)
+    try:
+        value = int(raw)
+    except ValueError:
+        return max(minimum, default)
+    return max(minimum, value)
 
 
 def build_artifacts_prefix(job_id: str) -> str:
@@ -234,6 +263,79 @@ def convert_audio_to_wav_16khz_mono(input_path: Path, wav_path: Path) -> None:
         raise RuntimeError("Converted WAV audio is empty.")
 
 
+def get_wav_duration_seconds(wav_path: Path) -> float:
+    with wave.open(str(wav_path), "rb") as stream:
+        frame_rate = stream.getframerate()
+        total_frames = stream.getnframes()
+    if frame_rate <= 0:
+        return 0.0
+    return float(total_frames) / float(frame_rate)
+
+
+def build_stt_four_chunk_ranges(duration_seconds: float, overlap_seconds: float) -> list[dict]:
+    if duration_seconds <= 0.0:
+        raise RuntimeError("Audio duration must be positive for chunked STT.")
+
+    overlap = max(0.0, overlap_seconds)
+    q1 = duration_seconds / 4.0
+    q2 = duration_seconds / 2.0
+    q3 = duration_seconds * 0.75
+    boundaries = [0.0, q1, q2, q3, duration_seconds]
+
+    ranges: list[dict] = []
+    for index in range(4):
+        core_start = boundaries[index]
+        core_end = boundaries[index + 1]
+        start = core_start if index == 0 else max(0.0, core_start - overlap)
+        end = core_end if index == 3 else min(duration_seconds, core_end + overlap)
+        if end <= start:
+            end = min(duration_seconds, start + 0.1)
+        ranges.append(
+            {
+                "index": index,
+                "start_sec": start,
+                "end_sec": end,
+                "core_start_sec": core_start,
+                "core_end_sec": core_end,
+            }
+        )
+    return ranges
+
+
+def split_wav_into_chunks(wav_path: Path, output_dir: Path, chunk_ranges: list[dict]) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    chunk_paths: list[Path] = []
+    with wave.open(str(wav_path), "rb") as source:
+        channels = source.getnchannels()
+        sample_width = source.getsampwidth()
+        frame_rate = source.getframerate()
+        total_frames = source.getnframes()
+
+        for index, chunk in enumerate(chunk_ranges):
+            start_sec = float(chunk["start_sec"])
+            end_sec = float(chunk["end_sec"])
+
+            start_frame = max(0, min(total_frames, int(round(start_sec * frame_rate))))
+            end_frame = max(start_frame, min(total_frames, int(round(end_sec * frame_rate))))
+            frame_count = max(1, end_frame - start_frame)
+
+            source.setpos(start_frame)
+            frames = source.readframes(frame_count)
+            if not frames:
+                raise RuntimeError(f"Chunk {index + 1} WAV extraction produced no frames.")
+
+            chunk_path = output_dir / f"chunk_{index + 1}.wav"
+            with wave.open(str(chunk_path), "wb") as chunk_file:
+                chunk_file.setnchannels(channels)
+                chunk_file.setsampwidth(sample_width)
+                chunk_file.setframerate(frame_rate)
+                chunk_file.writeframes(frames)
+            chunk_paths.append(chunk_path)
+
+    return chunk_paths
+
+
 def process_transcription_job(
     job_store: JobStore,
     job_id: str,
@@ -244,7 +346,10 @@ def process_transcription_job(
     bucket_name: Optional[str] = None
     audio_blob_path = build_audio_blob_path(job_id)
     output_prefix = build_output_prefix(job_id)
+    chunk_output_prefix = build_chunk_output_root_prefix(job_id)
+    chunk_audio_prefix = f"jobs/{job_id}/audio_chunks/"
     uploaded_audio = False
+    uploaded_chunk_audio = False
     artifacts_error: Optional[str] = None
     artifacts_gcs_prefix: Optional[str] = None
     has_diarization: Optional[bool] = None
@@ -299,6 +404,57 @@ def process_transcription_job(
             gcs_audio_uri,
         )
 
+        chunk_specs: list[dict] = []
+        stt_chunk_enabled = parse_bool_env("STT_PARALLEL_CHUNKS_ENABLED", False)
+        stt_chunk_overlap = parse_float_env("STT_PARALLEL_CHUNK_OVERLAP_SECONDS", 2.0, minimum=0.0)
+        stt_chunk_min_audio_seconds = parse_float_env(
+            "STT_PARALLEL_CHUNK_MIN_AUDIO_SECONDS",
+            120.0,
+            minimum=1.0,
+        )
+        stt_chunk_workers = parse_int_env("STT_PARALLEL_CHUNK_MAX_WORKERS", 4, minimum=1)
+
+        if stt_chunk_enabled:
+            try:
+                wav_duration_seconds = get_wav_duration_seconds(wav_path)
+                if wav_duration_seconds >= stt_chunk_min_audio_seconds:
+                    chunk_ranges = build_stt_four_chunk_ranges(
+                        duration_seconds=wav_duration_seconds,
+                        overlap_seconds=stt_chunk_overlap,
+                    )
+                    chunk_paths = split_wav_into_chunks(
+                        wav_path=wav_path,
+                        output_dir=temp_dir / "audio_chunks",
+                        chunk_ranges=chunk_ranges,
+                    )
+
+                    for index, chunk_path in enumerate(chunk_paths):
+                        blob_path = f"{chunk_audio_prefix}chunk_{index + 1}.wav"
+                        chunk_uri = upload_file(
+                            bucket_name,
+                            blob_path,
+                            chunk_path,
+                            content_type="audio/wav",
+                        )
+                        spec = dict(chunk_ranges[index])
+                        spec["uri"] = chunk_uri
+                        chunk_specs.append(spec)
+                    uploaded_chunk_audio = True
+                    logger.info(
+                        "job_id=%s uploaded_audio_chunks_to_gcs count=%s overlap_seconds=%.2f duration_seconds=%.2f",
+                        job_id,
+                        len(chunk_specs),
+                        stt_chunk_overlap,
+                        wav_duration_seconds,
+                    )
+            except Exception:
+                chunk_specs = []
+                logger.warning(
+                    "job_id=%s stt_chunk_preparation_failed_falling_back_to_single",
+                    job_id,
+                    exc_info=True,
+                )
+
         def on_stage(status: str, progress: int) -> None:
             job_store.update_job(job_id, status=status, progress=progress, error=None)
 
@@ -344,7 +500,23 @@ def process_transcription_job(
         with ThreadPoolExecutor(max_workers=2) as metric_pool:
             body_future: Future = metric_pool.submit(_compute_body_language)
 
-            stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
+            if chunk_specs:
+                try:
+                    stt_payload = transcribe_v2_chirp2_from_gcs_chunks(
+                        job_id,
+                        chunk_specs,
+                        max_workers=stt_chunk_workers,
+                        on_stage=on_stage,
+                    )
+                except Exception:
+                    logger.warning(
+                        "job_id=%s chunked_stt_failed_falling_back_to_single",
+                        job_id,
+                        exc_info=True,
+                    )
+                    stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
+            else:
+                stt_payload = transcribe_v2_chirp2_from_gcs(job_id, gcs_audio_uri, on_stage=on_stage)
 
             transcript_result = stt_payload.get("transcript", {})
             transcript_full_text = str(transcript_result.get("full_text") or "")
@@ -435,6 +607,16 @@ def process_transcription_job(
                         output_prefix,
                         exc_info=True,
                     )
+                try:
+                    delete_prefix(chunk_output_prefix, bucket=bucket_name)
+                except Exception:
+                    logger.warning(
+                        "job_id=%s cleanup_chunk_output_failed prefix=gs://%s/%s",
+                        job_id,
+                        bucket_name,
+                        chunk_output_prefix,
+                        exc_info=True,
+                    )
             if cleanup_audio and uploaded_audio:
                 try:
                     delete_blob(bucket_name, audio_blob_path)
@@ -444,6 +626,17 @@ def process_transcription_job(
                         job_id,
                         bucket_name,
                         audio_blob_path,
+                        exc_info=True,
+                    )
+            if cleanup_audio and uploaded_chunk_audio:
+                try:
+                    delete_prefix(chunk_audio_prefix, bucket=bucket_name)
+                except Exception:
+                    logger.warning(
+                        "job_id=%s cleanup_chunk_audio_failed prefix=gs://%s/%s",
+                        job_id,
+                        bucket_name,
+                        chunk_audio_prefix,
                         exc_info=True,
                     )
 

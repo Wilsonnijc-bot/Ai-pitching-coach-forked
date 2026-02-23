@@ -74,16 +74,19 @@ def _unsupported_temperature(exc: APIStatusError) -> bool:
     return "temperature" in message and "default (1)" in message
 
 
-def _request_round1_content(shared_input: SharedCoachingInput) -> str:
-    client = _build_client()
-    model = os.getenv("GPTSAPI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    user_prompt = USER_PROMPT_TEMPLATE.replace(
+def _build_round1_user_prompt(shared_input: SharedCoachingInput) -> str:
+    return USER_PROMPT_TEMPLATE.replace(
         "{transcript_full_text}",
         shared_input.transcript_full_text,
     ).replace(
         "{deck_text_or_empty}",
         shared_input.deck_text or "",
     )
+
+
+def _request_round1_content(user_prompt: str) -> str:
+    client = _build_client()
+    model = os.getenv("GPTSAPI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     base_kwargs = {
         "model": model,
@@ -143,6 +146,14 @@ def _request_round1_content(shared_input: SharedCoachingInput) -> str:
             raise RuntimeError(f"Round 1 LLM request failed ({status_code}): {detail}")
         raise RuntimeError(f"Round 1 LLM request failed: {detail}")
     raise RuntimeError("Round 1 LLM request failed before receiving a response.")
+
+
+def _repair_prompt(invalid_output: str) -> str:
+    return (
+        "Your previous output was invalid JSON. Return ONLY corrected valid JSON matching "
+        "the schema. Here is the invalid output:\n"
+        f"<<<{invalid_output}>>>"
+    )
 
 
 def _parse_json_with_repair(raw_content: str) -> dict:
@@ -229,8 +240,14 @@ def run_round1(job_store: JobStore, job_id: str) -> dict:
 
     try:
         shared_input = load_shared_input(job_store, job_id)
-        raw_content = _request_round1_content(shared_input)
-        parsed = _validate_round1_schema(_parse_json_with_repair(raw_content))
+        user_prompt = _build_round1_user_prompt(shared_input)
+        raw_content = _request_round1_content(user_prompt)
+
+        try:
+            parsed = _validate_round1_schema(_parse_json_with_repair(raw_content))
+        except Exception:
+            repaired_content = _request_round1_content(_repair_prompt(raw_content))
+            parsed = _validate_round1_schema(_parse_json_with_repair(repaired_content))
 
         job_store.update_job(
             job_id,
